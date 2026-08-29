@@ -1,0 +1,339 @@
+{
+  "furfrou": [
+    "heart trim furfrou",
+    "star trim furfrou",
+    "diamond trim furfrou",
+    "debutante trim furfrou",
+    "matron trim furfrou",
+    "dandy trim furfrou",
+    "la reine trim furfrou",
+    "kabuki trim furfrou",
+    "pharaoh trim furfrou"
+  ],
+  "flabebe": [
+    "orange flower flabebe",
+    "white flower flabebe",
+    "blue flower flabebe",
+    "yellow flower flabebe"
+  ],
+  "floette": [
+    "orange flower floette",
+    "white flower floette",
+    "blue flower floette",
+    "yellow flower floette"
+  ],
+  "florges": [
+    "orange flower florges",
+    "white flower florges",
+    "blue flower florges",
+    "yellow flower florges"
+  ],
+  "alcremie": [
+    "vanilla cream love sweet alcremie",
+    "vanilla cream berry sweet alcremie",
+    "vanilla cream star sweet alcremie",
+    "vanilla cream flower sweet alcremie",
+    "vanilla cream ribbon sweet alcremie",
+    "vanilla cream clover sweet alcremie"
+  ],
+  "arceus": [
+    "fighting arceus",
+    "flying arceus",
+    "poison arceus",
+    "ground arceus",
+    "rock arceus",
+    "bug arceus",
+    "ghost arceus",
+    "steel arceus",
+    "fire arceus",
+    "water arceus",
+    "grass arceus",
+    "electric arceus",
+    "psychic arceus",
+    "ice arceus",
+    "dragon arceus",
+    "dark arceus",
+    "fairy arceus"
+  ],
+  "silvally": [
+    "silvally bug",
+    "silvally dark",
+    "silvally dragon",
+    "silvally electric",
+    "silvally fairy",
+    "silvally fighting",
+    "silvally fire",
+    "silvally flying",
+    "silvally ghost",
+    "silvally grass",
+    "silvally ground",
+    "silvally ice",
+    "silvally poison",
+    "silvally psychic",
+    "silvally rock",
+    "silvally steel",
+    "silvally water"
+  ],
+  "xerneas": [
+    "neutral xerneas"
+  ],
+  "unown": [
+    "unown a",
+    "unown b",
+    "unown c",
+    "unown d",
+    "unown e",
+    "unown f",
+    "unown g",
+    "unown h",
+    "unown i",
+    "unown j",
+    "unown k",
+    "unown l",
+    "unown m",
+    "unown n",
+    "unown o",
+    "unown p",
+    "unown q",
+    "unown r",
+    "unown s",
+    "unown t",
+    "unown u",
+    "unown v",
+    "unown w",
+    "unown x",
+    "unown y",
+    "unown z",
+    "unown exclamation",
+    "unown question"
+  ],
+  "pichu": [
+    "spikey eared pichu"
+  ],
+  "zigzagoon": [
+    "galarian zigzagoon"
+  ],
+  "linoone": [
+    "galarian linoone"
+  ],
+  "slowpoke": [
+    "galarian slowpoke"
+  ],
+  "slowbro": [
+    "galarian slowbro"
+  ],
+  "slowking": [
+    "galarian slowking"
+  ],
+  "farfetch'd": [
+    "galarian farfetch'd"
+  ],
+  "corsola": [
+    "galarian corsola"
+  ],
+  "yamask": [
+    "galarian yamask"
+  ],
+  "ponyta": [
+    "galarian ponyta"
+  ],
+  "rapidash": [
+    "galarian rapidash"
+  ],
+  "mr. mime": [
+    "galarian mr. mime"
+  ],
+  "weezing": [
+    "galarian weezing"
+  ],
+  "darumaka": [
+    "galarian darumaka"
+  ],
+  "darmanitan": [
+    "galarian darmanitan",
+    "zen darmanitan",
+    "galarian zen darmanitan"
+  ],
+  "zen darmanitan": [
+    "galarian zen darmanitan"
+  ],
+  "stunfisk": [
+    "galarian stunfisk"
+  ],
+  "meowth": [
+    "galarian meowth",
+    "alolan meowth"
+  ],
+  "rattata": [
+    "alolan rattata"
+  ],
+  "raticate": [
+    "alolan raticate"
+  ],
+  "sandshrew": [
+    "alolan sandshrew"
+  ],
+  "sandslash": [
+    "alolan sandslash"
+  ],
+  "vulpix": [
+    "alolan vulpix"
+  ],
+  "ninetales": [
+    "alolan ninetales"
+  ],
+  "diglett": [
+    "alolan diglett"
+  ],
+  "dugtrio": [
+    "alolan dugtrio"
+  ],
+  "geodude": [
+    "alolan geodude"
+  ],
+  "graveler": [
+    "alolan graveler"
+  ],
+  "golem": [
+    "alolan golem"
+  ],
+  "grimer": [
+    "alolan grimer"
+  ],
+  "muk": [
+    "alolan muk"
+  ],
+  "exeggutor": [
+    "alolan exeggutor"
+  ],
+  "marowak": [
+    "alolan marowak"
+  ],
+  "raichu": [
+    "alolan raichu"
+  ],
+  "persian": [
+    "alolan persian"
+  ],
+  "tauros": [
+    "aqua breed tauros",
+    "blaze breed tauros",
+    "combat breed tauros"
+  ],
+  "growlithe": [
+    "hisuian growlithe"
+  ],
+  "arcanine": [
+    "hisuian arcanine"
+  ],
+  "voltorb": [
+    "hisuian voltorb"
+  ],
+  "electrode": [
+    "hisuian electrode"
+  ],
+  "typhlosion": [
+    "hisuian typhlosion"
+  ],
+  "qwilfish": [
+    "hisuian qwilfish"
+  ],
+  "overqwil": [
+    "overqwil"
+  ],
+  "sneasel": [
+    "hisuian sneasel"
+  ],
+  "sneasler": [
+    "sneasler"
+  ],
+  "samurott": [
+    "hisuian samurott"
+  ],
+  "lilligant": [
+    "hisuian lilligant"
+  ],
+  "zorua": [
+    "hisuian zorua"
+  ],
+  "zoroark": [
+    "hisuian zoroark"
+  ],
+  "sliggoo": [
+    "hisuian sliggoo"
+  ],
+  "goodra": [
+    "hisuian goodra"
+  ],
+  "braviary": [
+    "hisuian braviary"
+  ],
+  "avalugg": [
+    "hisuian avalugg"
+  ],
+  "decidueye": [
+    "hisuian decidueye"
+  ],
+  "basculegion": [
+    "basculegion"
+  ],
+  "wooper": [
+    "paldean wooper"
+  ],
+  "rotom": [
+    "fan rotom",
+    "mow rotom",
+    "heat rotom",
+    "frost rotom",
+    "wash rotom",
+    "rotom pokedex",
+    "rotom phone",
+    "rotom drone"
+  ],
+  "oricorio": [
+    "pom pom oricorio",
+    "pau oricorio",
+    "sensu oricorio"
+  ],
+  "vivillon": [
+    "icy snow vivillon",
+    "tundra vivillon",
+    "continental vivillon",
+    "garden vivillon",
+    "polar vivillon",
+    "elegant vivillon",
+    "modern vivillon",
+    "marine vivillon",
+    "archipelago vivillon",
+    "high plain vivillon",
+    "sandstorm vivillon",
+    "river vivillon",
+    "monsoon vivillon",
+    "savanna vivillon",
+    "sun vivillon",
+    "ocean vivillon",
+    "jungle vivillon",
+    "fancy vivillon",
+    "pokeball vivillon"
+  ],
+  "miraidon": [
+    "drive mode miraidon",
+    "glide mode miraidon"
+  ],
+  "koraidon": [
+    "sprinting build koraidon",
+    "gliding build koraidon"
+  ],
+  "urshifu": [
+    "single strike style urshifu",
+    "rapid strike style urshifu"
+  ],
+  "ogerpon": [
+    "cornerstone mask ogerpon",
+    "hearthflame mask ogerpon",
+    "wellspring mask ogerpon"
+  ],
+  "zarude": [
+    "dada zarude"
+  ]
+}

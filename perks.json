@@ -1,0 +1,9 @@
+{
+  "Bronze": 25,
+  "Silver": 50,
+  "Gold": 100,
+  "Diamond": 200,
+  "Platinum": 300,
+  "Sapphire": 400,
+  "Obsidian": 500
+}

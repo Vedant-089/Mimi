@@ -1,0 +1,50 @@
+{
+  "1489526525870215188": {
+    "serverid": 1489526525870215188,
+    "type_pings": true,
+    "types": {
+      "normal": true,
+      "fire": true,
+      "water": true,
+      "electric": true,
+      "grass": true,
+      "ice": true,
+      "fighting": true,
+      "poison": true,
+      "ground": true,
+      "flying": true,
+      "psychic": true,
+      "bug": true,
+      "rock": true,
+      "ghost": true,
+      "dragon": true,
+      "dark": true,
+      "steel": true,
+      "fairy": true
+    }
+  },
+  "1322103302888095837": {
+    "serverid": 1322103302888095837,
+    "type_pings": true,
+    "types": {
+      "normal": false,
+      "fire": true,
+      "water": false,
+      "electric": true,
+      "grass": true,
+      "ice": false,
+      "fighting": false,
+      "poison": true,
+      "ground": false,
+      "flying": false,
+      "psychic": true,
+      "bug": true,
+      "rock": true,
+      "ghost": false,
+      "dragon": false,
+      "dark": true,
+      "steel": true,
+      "fairy": true
+    }
+  }
+}

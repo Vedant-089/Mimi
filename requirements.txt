@@ -1,0 +1,7 @@
+discord.py
+python-dotenv
+asyncpg
+onnxruntime
+Pillow
+aiohttp
+numpy
