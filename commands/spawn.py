@@ -25,6 +25,7 @@ from functions import (
     get_users_type_ping,
     get_users_region_ping,
     update_and_check_incense,
+    parse_incense_footer,
     warm_ping_caches,
 )
 
@@ -674,16 +675,21 @@ class SpawnPredictor(commands.Cog):
                 else None
             )
 
-            is_allowed = await update_and_check_incense(
+            is_active_incense, is_20s, remaining = parse_incense_footer(embed_footer)
+
+            incense_allowed = await update_and_check_incense(
                 message.guild.id if message.guild else None,
                 message.channel.id,
                 embed_footer,
                 db
             )
 
-            if not is_allowed:
-                download_task.cancel()
-                return
+            # If this is an active incense spawn, enforce incense limit checks.
+            # Normal spawns (no active incense footer) are predicted unconditionally.
+            if is_active_incense and is_20s and remaining is not None:
+                if not incense_allowed:
+                    download_task.cancel()
+                    return
 
             # 1. Download image
             img_bytes, dl_error = await download_task
