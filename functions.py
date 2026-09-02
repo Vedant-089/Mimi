@@ -102,6 +102,34 @@ for base, forms in _forms_mapping.items():
         _form_to_base[form] = base
 
 
+# Load alias.json and prepare mapping
+def _load_alias_mapping():
+    try:
+        with open("alias.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        mapping = {}
+        for main_name, aliases in data.items():
+            main_clean = main_name.lower().strip()
+            mapping[main_clean] = main_clean
+            if isinstance(aliases, list):
+                for alias in aliases:
+                    if isinstance(alias, str):
+                        alias_clean = alias.lower().strip()
+                        if alias_clean:
+                            mapping[alias_clean] = main_clean
+        return mapping
+    except Exception as e:
+        print("⚠️ Failed to load alias.json:", e)
+        return {}
+
+ALIAS_MAPPING = _load_alias_mapping()
+
+
+def resolve_alias(name: str) -> str:
+    cleaned = (name or "").lower().strip()
+    return ALIAS_MAPPING.get(cleaned, cleaned)
+
+
 # ------------------------
 # Hunt Cache Functions
 # ------------------------

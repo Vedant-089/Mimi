@@ -9,7 +9,7 @@ HELP_PAGES_DATA = [
             "• `m!shinyhunt` (`m!sh`) - Sets user's Shiny Hunt to that specific Pokémon globally.\n"
             "• `m!sh <pokemon>` - Sets your global shiny hunt target to a specified Pokémon.\n"
             "• `m!sh` - Displays your current active shiny hunt target.\n"
-            "• `m!sh reset` / `m!sh none` - Resets and clears your current shiny hunt target."
+            "• `m!sh reset` / `none` / `clear` / `remove` - Resets and clears your current shiny hunt target."
         ),
     },
     {

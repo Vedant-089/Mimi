@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands
 
 from database import db
-from functions import ensure_ping_tables, invalidate_reserve_cache
+from functions import ensure_ping_tables, invalidate_reserve_cache, resolve_alias
 
 with open("class.json", "r", encoding="utf-8") as f:
     VALID_POKEMON = set(name.lower().strip() for name in json.load(f).keys())
@@ -62,7 +62,7 @@ def expand_reserve_inputs(input_names):
             continue
 
         if key.startswith("all "):
-            target = key[4:].strip()
+            target = resolve_alias(key[4:].strip())
             if target in FORMS_BY_BASE:
                 if target in VALID_POKEMON:
                     expanded.add(target)
@@ -73,11 +73,12 @@ def expand_reserve_inputs(input_names):
                 expanded.add(target)
                 continue
 
-            invalid.append(target)
+            invalid.append(key[4:].strip())
             continue
 
-        if key in VALID_POKEMON:
-            expanded.add(key)
+        resolved = resolve_alias(key)
+        if resolved in VALID_POKEMON:
+            expanded.add(resolved)
         else:
             invalid.append(key)
 

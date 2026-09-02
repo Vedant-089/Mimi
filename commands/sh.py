@@ -5,7 +5,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-from functions import ensure_ping_tables
+from functions import ensure_ping_tables, resolve_alias
 
 # ---------------------------------------------------------------------------
 # LOGGING
@@ -101,7 +101,7 @@ class ShinyHunt(commands.Cog):
         # ------------------------------------------------------------
         key = str(pokemon).lower().strip()
 
-        if key in ["none", "reset", "null", "nothing"]:
+        if key in ["none", "reset", "clear", "remove", "null", "nothing"]:
             reset_query = """
                 INSERT INTO shiny_hunt (userid, pokemon_name)
                 VALUES ($1, NULL)
@@ -114,18 +114,20 @@ class ShinyHunt(commands.Cog):
             return
 
         # ------------------------------------------------------------
-        # Case 3 — normal shiny hunt set (validate Pokémon)
+        # Case 3 — normal shiny hunt set (validate Pokémon & aliases)
         # ------------------------------------------------------------
-        if key not in VALID_POKEMON:
-            log.debug("%s is not in whitelist", key)
+        resolved_key = resolve_alias(key)
+
+        if resolved_key not in VALID_POKEMON:
+            log.debug("%s (%s) is not in whitelist", key, resolved_key)
             await ctx.reply(f"❌ **{pokemon}** isn't on the recognised Pokémon list.")
             return
 
         try:
-            await self.set_shiny_hunt(ctx.author.id, key)
-            await ctx.reply(f"✅ Shiny hunt updated to **{pokemon.title()}**!")
+            await self.set_shiny_hunt(ctx.author.id, resolved_key)
+            await ctx.reply(f"✅ Shiny hunt updated to **{resolved_key.title()}**!")
         except Exception as e:
-            log.exception("Failed to set shiny hunt for %s → %s", ctx.author.id, key)
+            log.exception("Failed to set shiny hunt for %s → %s", ctx.author.id, resolved_key)
             await ctx.reply("⚠️ An error occurred while saving your shiny hunt. Please try again later.")
 
     # ---------------------------------------------------------------------
