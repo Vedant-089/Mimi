@@ -288,7 +288,8 @@
     "wash rotom",
     "rotom pokedex",
     "rotom phone",
-    "rotom drone"
+    "rotom drone",
+    "dj rotom"
   ],
   "oricorio": [
     "pom pom oricorio",
@@ -344,5 +345,20 @@
   ],
   "amped toxtricity": [
     "low key toxtricity"
+  ],
+  "pikachu": [
+    "peakychu"
+  ],
+  "tangrowth": [
+    "prof tangrowth"
+  ],
+  "smeargle": [
+    "smearguru"
+  ],
+  "snorlax": [
+    "mosslax"
+  ],
+  "greedent": [
+    "chef dente"
   ]
 }
