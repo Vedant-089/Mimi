@@ -5,7 +5,13 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-from functions import ensure_ping_tables, resolve_alias
+from functions import ensure_ping_tables, invalidate_hunt_cache, resolve_alias
+
+with open("forms.json", "r", encoding="utf-8") as f:
+    FORMS_BY_BASE = {
+        base.lower().strip(): forms
+        for base, forms in json.load(f).items()
+    }
 
 # ---------------------------------------------------------------------------
 # LOGGING
@@ -72,6 +78,7 @@ class ShinyHunt(commands.Cog):
             """
         )
         status = await self.bot.db.execute(query, user_id, pokemon)
+        invalidate_hunt_cache()
         log.info("DB status after setting hunt for %s → %s: %s", user_id, pokemon, status)
 
     # ---------------------------------------------------------------------
@@ -91,7 +98,13 @@ class ShinyHunt(commands.Cog):
             row = await self.bot.db.fetchrow(query, ctx.author.id)
 
             if row and row['pokemon_name']:
-                await ctx.reply(f"🔍 You're currently hunting **{row['pokemon_name'].title()}**!")
+                current_hunt = row['pokemon_name']
+                display_name = (
+                    current_hunt[4:].title() + " (all)"
+                    if current_hunt.lower().startswith("all ")
+                    else current_hunt.title()
+                )
+                await ctx.reply(f"🔍 You're currently hunting **{display_name}**!")
             else:
                 await ctx.reply("❌ You are not hunting any Pokémon currently.")
             return
@@ -118,14 +131,23 @@ class ShinyHunt(commands.Cog):
         # ------------------------------------------------------------
         resolved_key = resolve_alias(key)
 
-        if resolved_key not in VALID_POKEMON:
+        if key.startswith("all "):
+            target = resolve_alias(key[4:].strip())
+            if target not in FORMS_BY_BASE or target not in VALID_POKEMON:
+                await ctx.reply(f"❌ **{pokemon}** isn't a Pokémon with recognised forms.")
+                return
+
+            resolved_key = f"all {target}"
+
+        elif resolved_key not in VALID_POKEMON:
             log.debug("%s (%s) is not in whitelist", key, resolved_key)
             await ctx.reply(f"❌ **{pokemon}** isn't on the recognised Pokémon list.")
             return
 
         try:
             await self.set_shiny_hunt(ctx.author.id, resolved_key)
-            await ctx.reply(f"✅ Shiny hunt updated to **{resolved_key.title()}**!")
+            display_name = resolved_key[4:].title() + " (all)" if resolved_key.startswith("all ") else resolved_key.title()
+            await ctx.reply(f"✅ Shiny hunt updated to **{display_name}**!")
         except Exception as e:
             log.exception("Failed to set shiny hunt for %s → %s", ctx.author.id, resolved_key)
             await ctx.reply("⚠️ An error occurred while saving your shiny hunt. Please try again later.")

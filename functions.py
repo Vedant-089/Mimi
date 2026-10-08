@@ -170,11 +170,16 @@ async def get_users_hunting(pokemon_name: str, db_instance):
             asyncio.create_task(refresh_hunt_cache(db_instance))
 
     name = pokemon_name.lower()
+    base_name = _form_to_base.get(name, name)
     user_ids = set(_hunt_cache.get(name, []))
 
-    # If it's a base form, include users hunting all its variants
-    if name in _forms_mapping:
-        for form in _forms_mapping[name]:
+    # A hunt stored as "all <base>" covers the base and every known form.
+    user_ids.update(_hunt_cache.get(f"all {base_name}", []))
+
+    # A regular base hunt also covers its known forms.
+    if base_name in _forms_mapping:
+        user_ids.update(_hunt_cache.get(base_name, []))
+        for form in _forms_mapping[base_name]:
             user_ids.update(_hunt_cache.get(form, []))
 
     return list(user_ids)
