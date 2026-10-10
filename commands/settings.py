@@ -56,10 +56,7 @@ class ServerSettingsView(discord.ui.LayoutView):
     async def starboard(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
-        await interaction.response.send_message(
-            "Starboard settings will be available here soon.",
-            ephemeral=True,
-        )
+        await interaction.response.edit_message(view=StarboardSettingsView(self.author_id))
 
 
 class ServerSettings(commands.Cog):
@@ -149,6 +146,103 @@ class NamingSettingsView(discord.ui.LayoutView):
         self.only_pings = not self.only_pings
         self._build_layout()
         await interaction.response.edit_message(view=self)
+
+    async def back(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        await interaction.response.edit_message(view=ServerSettingsView(self.author_id))
+
+
+class StarboardSettingsView(discord.ui.LayoutView):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self._build_layout()
+
+    def _build_layout(self):
+        self.clear_items()
+
+        self.main_select = discord.ui.ChannelSelect(
+            placeholder="Select main starboard channel",
+            channel_types=[discord.ChannelType.text],
+            custom_id="settings:starboard:main-channel",
+        )
+        self.main_select.callback = self.select_main_channel
+
+        self.shiny_select = discord.ui.ChannelSelect(
+            placeholder="Select shiny board channel",
+            channel_types=[discord.ChannelType.text],
+            custom_id="settings:starboard:shiny-channel",
+        )
+        self.shiny_select.callback = self.select_shiny_channel
+
+        self.gmax_select = discord.ui.ChannelSelect(
+            placeholder="Select Gmax board channel",
+            channel_types=[discord.ChannelType.text],
+            custom_id="settings:starboard:gmax-channel",
+        )
+        self.gmax_select.callback = self.select_gmax_channel
+
+        back_button = discord.ui.Button(
+            label="Back",
+            style=discord.ButtonStyle.primary,
+            custom_id="settings:starboard:back",
+        )
+        back_button.callback = self.back
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# Starboard settings\nConfigure channels for each type of catch."
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Main Starboard**\n-# Shows shiny, Gmax, high IV, and low IV catches."
+                ),
+                discord.ui.ActionRow(self.main_select),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Shiny Board**\n-# Shows shiny catches only."
+                ),
+                discord.ui.ActionRow(self.shiny_select),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Gmax Board**\n-# Shows Gmax catches only."
+                ),
+                discord.ui.ActionRow(self.gmax_select),
+                discord.ui.Separator(),
+                discord.ui.ActionRow(back_button),
+                accent_color=discord.Color.from_rgb(47, 49, 54),
+            )
+        )
+
+    async def _check_user(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ Only the person who opened these settings can use the buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _confirm_channel(self, interaction: discord.Interaction, board_name: str, selector):
+        if not await self._check_user(interaction):
+            return
+        channel = selector.values[0] if selector.values else None
+        channel_name = channel.mention if channel is not None else "that channel"
+        await interaction.response.send_message(
+            f"✅ {board_name} channel selected: {channel_name}",
+            ephemeral=True,
+        )
+
+    async def select_main_channel(self, interaction: discord.Interaction):
+        await self._confirm_channel(interaction, "Main Starboard", self.main_select)
+
+    async def select_shiny_channel(self, interaction: discord.Interaction):
+        await self._confirm_channel(interaction, "Shiny Board", self.shiny_select)
+
+    async def select_gmax_channel(self, interaction: discord.Interaction):
+        await self._confirm_channel(interaction, "Gmax Board", self.gmax_select)
 
     async def back(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
