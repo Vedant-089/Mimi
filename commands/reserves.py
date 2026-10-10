@@ -164,7 +164,7 @@ class ReserveCommands(commands.Cog):
         await ctx.send(
             "Usage: `m!r @user`, `m!r search <pokemon>`, "
             "`m!r a @user <pokemon>`, `m!r a <pokemon> @user`, "
-            "`m!r r @user <pokemon>`, `m!r r <pokemon> @user`, "
+            "`m!r r @user <pokemon>`, `m!r r <pokemon> @user`, `m!r r <pokemon>`, "
             "`m!r clear`, `m!r clear @user`, or `m!r l`"
         )
 
@@ -340,6 +340,41 @@ class ReserveCommands(commands.Cog):
         invalidate_reserve_cache()
         await ctx.send(f"🧹 Cleared {member.mention}'s reserves.")
 
+    async def remove_reserves_for_all(self, ctx: commands.Context, valid_names: list[str], invalid_names: list[str]):
+        rows = await db.fetch(
+            """
+            SELECT userid, pokemon_name FROM reserve_pings
+            WHERE serverid = $1 AND pokemon_name = ANY($2::text[])
+            """,
+            ctx.guild.id, valid_names
+        )
+        removed = sorted({row["pokemon_name"] for row in rows})
+        user_count = len({row["userid"] for row in rows})
+        if not removed:
+            response = "ℹ️ None of those Pokémon are in any reserves in this server."
+            if invalid_names:
+                response += f"\n❌ Invalid: {', '.join(invalid_names)}"
+            await ctx.send(response)
+            return
+
+        await db.execute(
+            """
+            DELETE FROM reserve_pings
+            WHERE serverid = $1 AND pokemon_name = ANY($2::text[])
+            """,
+            ctx.guild.id, valid_names
+        )
+        invalidate_reserve_cache()
+
+        preview = ", ".join(name.title() for name in removed[:25])
+        if len(removed) > 25:
+            preview += f", ... (+{len(removed) - 25} more)"
+
+        response = f"🗑️ Removed from {user_count} users' reserves: {preview}"
+        if invalid_names:
+            response += f"\n❌ Invalid: {', '.join(invalid_names)}"
+        await ctx.send(response)
+
     @reserves.command(name="clear", aliases=["c"])
     @commands.guild_only()
     async def clear(self, ctx: commands.Context, member: Optional[discord.Member] = None):
@@ -404,17 +439,22 @@ class ReserveCommands(commands.Cog):
 
         member, pokemon = await self.parse_member_and_pokemon(ctx, args)
         if member is None:
-            return await ctx.send("❌ Mention a user: `m!r r @user <pokemon>` or `m!r r <pokemon> @user`.")
+            pokemon = args
         if not pokemon:
             return await ctx.send("❌ Provide at least one Pokémon name.")
 
-        user_id = member.id
         serverid = ctx.guild.id
         input_names = [name.strip().lower() for name in pokemon.split(",") if name.strip()]
         valid_names, invalid_names = expand_reserve_inputs(input_names)
 
         if not valid_names:
             return await ctx.send("❌ No valid Pokémon provided.")
+
+        if member is None:
+            await self.remove_reserves_for_all(ctx, valid_names, invalid_names)
+            return
+
+        user_id = member.id
 
         current_rows = await db.fetch(
             """

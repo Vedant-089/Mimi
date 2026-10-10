@@ -26,6 +26,17 @@ async def load_extensions():
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
 
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        context = await bot.get_context(message)
+        command = context.command
+        if command is not None and command.qualified_name.split(" ", 1)[0] == "reserves":
+            await bot.invoke(context)
+        return
+
+    await bot.process_commands(message)
+
 async def main():
     async with bot:
         await bot.db.connect()
