@@ -71,6 +71,15 @@ class ServerSettingsView(discord.ui.LayoutView):
             return False
         return True
 
+    async def _check_admin(self, interaction: discord.Interaction) -> bool:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server administrators can change settings.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
     async def naming(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
@@ -181,8 +190,17 @@ class NamingSettingsView(discord.ui.LayoutView):
             return False
         return True
 
+    async def _check_admin(self, interaction: discord.Interaction) -> bool:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server administrators can change settings.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
     async def toggle_naming(self, interaction: discord.Interaction):
-        if not await self._check_user(interaction):
+        if not await self._check_user(interaction) or not await self._check_admin(interaction):
             return
         self.naming_enabled = not self.naming_enabled
         await db.execute(
@@ -194,7 +212,7 @@ class NamingSettingsView(discord.ui.LayoutView):
         await interaction.response.edit_message(view=self)
 
     async def toggle_only_pings(self, interaction: discord.Interaction):
-        if not await self._check_user(interaction):
+        if not await self._check_user(interaction) or not await self._check_admin(interaction):
             return
         self.only_pings = not self.only_pings
         await db.execute(
@@ -231,25 +249,34 @@ class StarboardSettingsView(discord.ui.LayoutView):
     def _build_layout(self):
         self.clear_items()
 
-        self.main_select = discord.ui.ChannelSelect(
-            placeholder="Select main starboard channel",
-            channel_types=[discord.ChannelType.text],
-            custom_id="settings:starboard:main-channel",
-        )
+        main_select_kwargs = {
+            "placeholder": "Select main starboard channel",
+            "channel_types": [discord.ChannelType.text],
+            "custom_id": "settings:starboard:main-channel",
+        }
+        if self.main_starboard is not None:
+            main_select_kwargs["default_values"] = [discord.Object(id=int(self.main_starboard))]
+        self.main_select = discord.ui.ChannelSelect(**main_select_kwargs)
         self.main_select.callback = self.select_main_channel
 
-        self.shiny_select = discord.ui.ChannelSelect(
-            placeholder="Select shiny board channel",
-            channel_types=[discord.ChannelType.text],
-            custom_id="settings:starboard:shiny-channel",
-        )
+        shiny_select_kwargs = {
+            "placeholder": "Select shiny board channel",
+            "channel_types": [discord.ChannelType.text],
+            "custom_id": "settings:starboard:shiny-channel",
+        }
+        if self.shiny_starboard is not None:
+            shiny_select_kwargs["default_values"] = [discord.Object(id=int(self.shiny_starboard))]
+        self.shiny_select = discord.ui.ChannelSelect(**shiny_select_kwargs)
         self.shiny_select.callback = self.select_shiny_channel
 
-        self.gmax_select = discord.ui.ChannelSelect(
-            placeholder="Select Gmax board channel",
-            channel_types=[discord.ChannelType.text],
-            custom_id="settings:starboard:gmax-channel",
-        )
+        gmax_select_kwargs = {
+            "placeholder": "Select Gmax board channel",
+            "channel_types": [discord.ChannelType.text],
+            "custom_id": "settings:starboard:gmax-channel",
+        }
+        if self.gmax_starboard is not None:
+            gmax_select_kwargs["default_values"] = [discord.Object(id=int(self.gmax_starboard))]
+        self.gmax_select = discord.ui.ChannelSelect(**gmax_select_kwargs)
         self.gmax_select.callback = self.select_gmax_channel
 
         back_button = discord.ui.Button(
@@ -294,8 +321,17 @@ class StarboardSettingsView(discord.ui.LayoutView):
             return False
         return True
 
+    async def _check_admin(self, interaction: discord.Interaction) -> bool:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server administrators can change settings.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
     async def _confirm_channel(self, interaction: discord.Interaction, board_name: str, selector):
-        if not await self._check_user(interaction):
+        if not await self._check_user(interaction) or not await self._check_admin(interaction):
             return
         channel = selector.values[0] if selector.values else None
         if channel is None:
