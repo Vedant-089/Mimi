@@ -20,6 +20,7 @@ HELP_PAGES_DATA = [
             "• `m!r remove <pokemon> @user` (`m!r r`) - Removes Pokémon from a user's reserves (Admins/allowed roles).\n"
             "• `m!r remove <pokemon>` (`m!r r`) - Removes Pokémon from every user's reserves (Admins/allowed roles).\n"
             "• `m!r exchange @user` (`m!r e`) - Exchanges Pokémon from a replied reserve list with that user's reserves (Admins/allowed roles).\n"
+            "• `m!r exchange @user1 @user2 [pokemon]` (`m!r e`) - Transfers selected or all reserves from user1 to user2.\n"
             "• `m!r clear` (`m!r c`) - Clears reserves for a specified user or all server reserves.\n"
             "• `m!r search <pokemon>` (`m!r s`) - Searches for users who have reserved specific Pokémon.\n"
             "• `m!r list` (`m!r l`) - Lists all active Pokémon reserves in the server.\n"
@@ -62,7 +63,8 @@ HELP_PAGES_DATA = [
             "• `m!rank <rare/regional/incense>` - Toggles ping roles (`Rares`, `Regionals`, `Incense`).\n"
             "• `m!incenses` - Displays active tracked incense channels in the server.\n"
             "• `m!event <role_names>` - Replaces your current type and region roles with selected ones.\n"
-            "• `m!roles` - Creates standard type, region, and perk roles (Admin Only)."
+            "• `m!roles` - Creates standard type, region, and perk roles (Admin Only).\n"
+            "• `m!settings` - Opens the server settings panel."
         ),
     },
 ]

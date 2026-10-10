@@ -559,11 +559,80 @@ class ReserveCommands(commands.Cog):
 
         return entries, errors
 
+    async def transfer_reserves(self, ctx: commands.Context, source: discord.Member, target: discord.Member, pokemon_names=None):
+        if source.id == target.id:
+            return await ctx.send("❌ The source and receiving users must be different.")
+
+        if pokemon_names is None:
+            rows = await db.fetch(
+                """
+                SELECT pokemon_name FROM reserve_pings
+                WHERE serverid = $1 AND userid = $2
+                ORDER BY pokemon_name
+                """,
+                ctx.guild.id, source.id
+            )
+            pokemon_names = [row["pokemon_name"] for row in rows]
+            if not pokemon_names:
+                return await ctx.send(f"ℹ️ {source.mention} has no reserves to transfer.")
+        else:
+            rows = await db.fetch(
+                """
+                SELECT pokemon_name FROM reserve_pings
+                WHERE serverid = $1 AND userid = $2 AND pokemon_name = ANY($3::text[])
+                """,
+                ctx.guild.id, source.id, pokemon_names
+            )
+            available_names = {row["pokemon_name"] for row in rows}
+            missing_names = [name for name in pokemon_names if name not in available_names]
+            if missing_names:
+                return await ctx.send(
+                    f"❌ {source.mention} does not have these Pokémon in their reserves: "
+                    f"{', '.join(name.title() for name in missing_names)}"
+                )
+
+        await db.execute(
+            """
+            WITH moved AS (
+                DELETE FROM reserve_pings
+                WHERE serverid = $1 AND userid = $2 AND pokemon_name = ANY($4::text[])
+                RETURNING pokemon_name
+            )
+            INSERT INTO reserve_pings (serverid, userid, pokemon_name)
+            SELECT $1, $3, pokemon_name
+            FROM moved
+            ON CONFLICT (serverid, userid, pokemon_name) DO NOTHING
+            """,
+            ctx.guild.id, source.id, target.id, pokemon_names
+        )
+        invalidate_reserve_cache()
+
+        preview = ", ".join(name.title() for name in pokemon_names[:25])
+        if len(pokemon_names) > 25:
+            preview += f", ... (+{len(pokemon_names) - 25} more)"
+        await ctx.send(f"🔄 Transferred {preview} from {source.mention} to {target.mention}.")
+
     @reserves.command(name="exchange", aliases=["e"])
     @commands.guild_only()
     async def exchange(self, ctx: commands.Context, *, args: str):
         if not await self.ensure_manage_permission(ctx):
             return
+
+        mentioned_members = self._mention_members(ctx)
+        if len(mentioned_members) >= 2:
+            source, target = mentioned_members[:2]
+            pokemon_text = re.sub(r"<@!?&?\d+>", " ", args or "")
+            pokemon_text = re.sub(r"\s+", " ", pokemon_text).strip()
+            if not pokemon_text:
+                return await self.transfer_reserves(ctx, source, target)
+
+            input_names = [name.strip().lower() for name in pokemon_text.split(",") if name.strip()]
+            valid_names, invalid_names = expand_reserve_inputs(input_names)
+            if invalid_names:
+                return await ctx.send(f"❌ Invalid Pokémon: {', '.join(invalid_names)}")
+            if not valid_names:
+                return await ctx.send("❌ Provide at least one Pokémon name.")
+            return await self.transfer_reserves(ctx, source, target, valid_names)
 
         target, _ = await self.parse_member_and_pokemon(ctx, args)
         if target is None:
