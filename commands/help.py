@@ -35,7 +35,8 @@ HELP_PAGES_DATA = [
             "• `m!cl remove <pokemon>` - Removes Pokémon from your collection pings.\n"
             "• `m!cl clear` - Clears all Pokémon from your collection pings.\n"
             "• `m!cl list` - Displays all Pokémon in your server collection.\n"
-            "• `m!gcl add <pokemon>` / `m!gcl remove <pokemon>` - Adds or removes exact Pokémon names in every server collection."
+            "• `m!gcl add/remove <pokemon>` - Adds or removes exact Pokémon names in every server collection.\n"
+            "• `m!gcl clear` - Clears your collection in every server."
         ),
     },
     {

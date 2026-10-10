@@ -137,7 +137,7 @@ class CollectionCommands(commands.Cog):
 
     @commands.group(name="gcl", invoke_without_command=True)
     async def global_collection(self, ctx):
-        await ctx.send("Usage: `m!gcl add/remove <pokemon>`")
+        await ctx.send("Usage: `m!gcl add/remove <pokemon>` or `m!gcl clear`")
 
     @global_collection.command(name="add")
     async def global_add(self, ctx, *, names: str):
@@ -193,6 +193,19 @@ class CollectionCommands(commands.Cog):
         if invalid:
             response += f"\n❌ Invalid or unsupported: {', '.join(invalid)}"
         await ctx.send(response)
+
+    @global_collection.command(name="clear")
+    async def global_clear(self, ctx):
+        server_ids = [guild.id for guild in self.bot.guilds]
+        await db.execute(
+            """
+            DELETE FROM collection_pings
+            WHERE userid = $1 AND serverid = ANY($2::bigint[])
+            """,
+            ctx.author.id, server_ids
+        )
+        invalidate_collection_cache()
+        await ctx.send(f"🧹 Your collection has been cleared in {len(server_ids)} servers.")
 
     @commands.group(name="cl", invoke_without_command=True)
     @commands.guild_only()
