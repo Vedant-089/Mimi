@@ -55,6 +55,16 @@ PING_TABLES_SQL = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS server_settings (
+        serverid BIGINT PRIMARY KEY,
+        naming BOOLEAN NOT NULL DEFAULT TRUE,
+        only_ping BOOLEAN NOT NULL DEFAULT FALSE,
+        main_starboard BIGINT,
+        shiny_starboard BIGINT,
+        gmax_starboard BIGINT
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS server_perks (
         serverid BIGINT PRIMARY KEY,
         perk_level TEXT NOT NULL

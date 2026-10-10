@@ -1,11 +1,34 @@
 import discord
 from discord.ext import commands
 
+from database import db
+
+
+async def get_server_settings(server_id: int):
+    await db.execute(
+        """
+        INSERT INTO server_settings (serverid)
+        VALUES ($1)
+        ON CONFLICT (serverid) DO NOTHING
+        """,
+        server_id,
+    )
+    return await db.fetchrow(
+        """
+        SELECT naming, only_ping, main_starboard, shiny_starboard, gmax_starboard
+        FROM server_settings
+        WHERE serverid = $1
+        """,
+        server_id,
+    )
 
 class ServerSettingsView(discord.ui.LayoutView):
-    def __init__(self, author_id: int):
+    def __init__(self, author_id: int, server_id: int, naming_enabled: bool = True, only_pings: bool = False):
         super().__init__(timeout=180)
         self.author_id = author_id
+        self.server_id = server_id
+        self.naming_enabled = naming_enabled
+        self.only_pings = only_pings
 
         self.naming_button = discord.ui.Button(
             label="Open",
@@ -51,12 +74,28 @@ class ServerSettingsView(discord.ui.LayoutView):
     async def naming(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
-        await interaction.response.edit_message(view=NamingSettingsView(self.author_id))
+        await interaction.response.edit_message(
+            view=NamingSettingsView(
+                self.author_id,
+                self.server_id,
+                self.naming_enabled,
+                self.only_pings,
+            )
+        )
 
     async def starboard(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
-        await interaction.response.edit_message(view=StarboardSettingsView(self.author_id))
+        settings = await get_server_settings(self.server_id)
+        await interaction.response.edit_message(
+            view=StarboardSettingsView(
+                self.author_id,
+                self.server_id,
+                settings["main_starboard"],
+                settings["shiny_starboard"],
+                settings["gmax_starboard"],
+            )
+        )
 
 
 class ServerSettings(commands.Cog):
@@ -66,13 +105,22 @@ class ServerSettings(commands.Cog):
     @commands.command(name="settings")
     @commands.guild_only()
     async def settings(self, ctx: commands.Context):
-        await ctx.send(view=ServerSettingsView(ctx.author.id))
+        settings = await get_server_settings(ctx.guild.id)
+        await ctx.send(
+            view=ServerSettingsView(
+                ctx.author.id,
+                ctx.guild.id,
+                settings["naming"],
+                settings["only_ping"],
+            )
+        )
 
 
 class NamingSettingsView(discord.ui.LayoutView):
-    def __init__(self, author_id: int, naming_enabled: bool = True, only_pings: bool = False):
+    def __init__(self, author_id: int, server_id: int, naming_enabled: bool = True, only_pings: bool = False):
         super().__init__(timeout=180)
         self.author_id = author_id
+        self.server_id = server_id
         self.naming_enabled = naming_enabled
         self.only_pings = only_pings
         self._build_layout()
@@ -137,6 +185,11 @@ class NamingSettingsView(discord.ui.LayoutView):
         if not await self._check_user(interaction):
             return
         self.naming_enabled = not self.naming_enabled
+        await db.execute(
+            "UPDATE server_settings SET naming = $1 WHERE serverid = $2",
+            self.naming_enabled,
+            self.server_id,
+        )
         self._build_layout()
         await interaction.response.edit_message(view=self)
 
@@ -144,19 +197,35 @@ class NamingSettingsView(discord.ui.LayoutView):
         if not await self._check_user(interaction):
             return
         self.only_pings = not self.only_pings
+        await db.execute(
+            "UPDATE server_settings SET only_ping = $1 WHERE serverid = $2",
+            self.only_pings,
+            self.server_id,
+        )
         self._build_layout()
         await interaction.response.edit_message(view=self)
 
     async def back(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
-        await interaction.response.edit_message(view=ServerSettingsView(self.author_id))
+        await interaction.response.edit_message(
+            view=ServerSettingsView(
+                self.author_id,
+                self.server_id,
+                self.naming_enabled,
+                self.only_pings,
+            )
+        )
 
 
 class StarboardSettingsView(discord.ui.LayoutView):
-    def __init__(self, author_id: int):
+    def __init__(self, author_id: int, server_id: int, main_starboard=None, shiny_starboard=None, gmax_starboard=None):
         super().__init__(timeout=180)
         self.author_id = author_id
+        self.server_id = server_id
+        self.main_starboard = main_starboard
+        self.shiny_starboard = shiny_starboard
+        self.gmax_starboard = gmax_starboard
         self._build_layout()
 
     def _build_layout(self):
@@ -229,9 +298,22 @@ class StarboardSettingsView(discord.ui.LayoutView):
         if not await self._check_user(interaction):
             return
         channel = selector.values[0] if selector.values else None
+        if channel is None:
+            return await interaction.response.send_message("❌ No channel was selected.", ephemeral=True)
+
+        column_by_board = {
+            "Main Starboard": "main_starboard",
+            "Shiny Board": "shiny_starboard",
+            "Gmax Board": "gmax_starboard",
+        }
+        await db.execute(
+            f"UPDATE server_settings SET {column_by_board[board_name]} = $1 WHERE serverid = $2",
+            channel.id,
+            self.server_id,
+        )
         channel_name = channel.mention if channel is not None else "that channel"
         await interaction.response.send_message(
-            f"✅ {board_name} channel selected: {channel_name}",
+            f"✅ {board_name} channel saved: {channel_name}",
             ephemeral=True,
         )
 
@@ -247,7 +329,15 @@ class StarboardSettingsView(discord.ui.LayoutView):
     async def back(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
-        await interaction.response.edit_message(view=ServerSettingsView(self.author_id))
+        settings = await get_server_settings(self.server_id)
+        await interaction.response.edit_message(
+            view=ServerSettingsView(
+                self.author_id,
+                self.server_id,
+                settings["naming"],
+                settings["only_ping"],
+            )
+        )
 
 
 async def setup(bot: commands.Bot):
