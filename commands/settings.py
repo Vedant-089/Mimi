@@ -2,10 +2,42 @@ import discord
 from discord.ext import commands
 
 
-class ServerSettingsView(discord.ui.View):
+class ServerSettingsView(discord.ui.LayoutView):
     def __init__(self, author_id: int):
         super().__init__(timeout=180)
         self.author_id = author_id
+
+        self.naming_button = discord.ui.Button(
+            label="Open",
+            style=discord.ButtonStyle.success,
+            custom_id="settings:naming",
+        )
+        self.naming_button.callback = self.naming
+
+        self.starboard_button = discord.ui.Button(
+            label="Open",
+            style=discord.ButtonStyle.success,
+            custom_id="settings:starboard",
+        )
+        self.starboard_button.callback = self.starboard
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# Server Settings\nManage settings for this server."
+                ),
+                discord.ui.Separator(),
+                discord.ui.Section(
+                    "### Naming\nConfigure server naming preferences.",
+                    accessory=self.naming_button,
+                ),
+                discord.ui.Section(
+                    "### Starboard\nConfigure the server starboard.",
+                    accessory=self.starboard_button,
+                ),
+                accent_color=discord.Color.from_rgb(47, 49, 54),
+            )
+        )
 
     async def _check_user(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
@@ -16,8 +48,7 @@ class ServerSettingsView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Naming", style=discord.ButtonStyle.success, row=0)
-    async def naming(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def naming(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
         await interaction.response.send_message(
@@ -25,8 +56,7 @@ class ServerSettingsView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Starboard", style=discord.ButtonStyle.success, row=0)
-    async def starboard(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def starboard(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
         await interaction.response.send_message(
@@ -42,29 +72,7 @@ class ServerSettings(commands.Cog):
     @commands.command(name="settings")
     @commands.guild_only()
     async def settings(self, ctx: commands.Context):
-        embed = discord.Embed(
-            title="Server Settings",
-            description="━━━━━━━━━━━━━━━━━━━━━━━━\nManage settings for this server.",
-            color=discord.Color.from_rgb(88, 96, 105),
-        )
-        embed.add_field(
-            name="Naming",
-            value="Configure server naming preferences.",
-            inline=True,
-        )
-        embed.add_field(
-            name="\u200b",
-            value="\u200b",
-            inline=True,
-        )
-        embed.add_field(
-            name="Starboard",
-            value="Configure the server starboard.",
-            inline=True,
-        )
-        embed.set_footer(text="Select a setting below to continue.")
-
-        await ctx.send(embed=embed, view=ServerSettingsView(ctx.author.id))
+        await ctx.send(view=ServerSettingsView(ctx.author.id))
 
 
 async def setup(bot: commands.Bot):
