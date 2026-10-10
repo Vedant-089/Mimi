@@ -517,20 +517,28 @@ class ReserveCommands(commands.Cog):
             if not line:
                 continue
 
-            parts = re.split(r"\s*-\s*", line, maxsplit=1)
             mentions = list(mention_pattern.finditer(line))
-            if len(parts) != 2 or len(mentions) != 1:
+            if len(mentions) != 1:
                 errors.append(f"line {line_number}")
                 continue
 
-            left, right = (part.strip() for part in parts)
             mention = mentions[0]
-            if mention.start() < line.find("-"):
+            if not line[:mention.start()].strip():
                 source_id = int(mention.group(1))
-                pokemon_text = right
+                after_mention = line[mention.end():]
+                separator = re.search(r"\s*-\s*", after_mention)
+                if separator is None:
+                    errors.append(f"line {line_number}")
+                    continue
+                pokemon_text = after_mention[separator.end():].strip()
             else:
                 source_id = int(mention.group(1))
-                pokemon_text = left
+                before_mention = line[:mention.start()]
+                separator_index = before_mention.rfind("-")
+                if separator_index < 0:
+                    errors.append(f"line {line_number}")
+                    continue
+                pokemon_text = before_mention[:separator_index].strip()
 
             source = ctx.guild.get_member(source_id)
             if source is None:
