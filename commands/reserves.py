@@ -45,7 +45,13 @@ GROUP_ALIASES = {
     "paradox": PARADOX_POKEMON,
 }
 
-RESERVES_MANAGER_ROLE_ID = 1490123523543400749
+ALLOWED_ROLES_FILE = "allowed_roles.json"
+
+try:
+    with open(ALLOWED_ROLES_FILE, "r", encoding="utf-8") as f:
+        ALLOWED_ROLES = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    ALLOWED_ROLES = {}
 
 
 def expand_reserve_inputs(input_names):
@@ -165,14 +171,60 @@ class ReserveCommands(commands.Cog):
     def has_manage_permission(self, member: discord.Member) -> bool:
         if member.guild_permissions.administrator:
             return True
-        return any(role.id == RESERVES_MANAGER_ROLE_ID for role in member.roles)
+        allowed_role_ids = {
+            int(role_id)
+            for role_id in ALLOWED_ROLES.get(str(member.guild.id), [])
+        }
+        return any(role.id in allowed_role_ids for role in member.roles)
 
     async def ensure_manage_permission(self, ctx: commands.Context) -> bool:
         if self.has_manage_permission(ctx.author):
             return True
 
-        await ctx.send("❌ You need administrator permissions or the reserves manager role to use this command.")
+        await ctx.send("❌ You need administrator permissions or an allowed reserves role to use this command.")
         return False
+
+    @commands.command(name="allow")
+    @commands.guild_only()
+    async def allow_roles(self, ctx: commands.Context, *, role_ids: str = ""):
+        if not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ You need administrator permissions to use this command.")
+            return
+
+        requested_ids = [value for value in re.split(r"[\s,]+", role_ids) if value]
+        if not requested_ids:
+            await ctx.send("❌ Use: `m!allow <roleid1>, <roleid2>`")
+            return
+
+        invalid_ids = [value for value in requested_ids if not value.isdigit()]
+        role_ids_to_add = []
+        missing_ids = []
+        for value in requested_ids:
+            if not value.isdigit():
+                continue
+            role_id = int(value)
+            if ctx.guild.get_role(role_id) is None:
+                missing_ids.append(value)
+            elif role_id not in role_ids_to_add:
+                role_ids_to_add.append(role_id)
+
+        if invalid_ids or missing_ids:
+            invalid_text = ", ".join(invalid_ids + missing_ids)
+            await ctx.send(f"❌ These are not valid roles in this server: {invalid_text}")
+            return
+
+        server_key = str(ctx.guild.id)
+        current_ids = [int(role_id) for role_id in ALLOWED_ROLES.get(server_key, [])]
+        for role_id in role_ids_to_add:
+            if role_id not in current_ids:
+                current_ids.append(role_id)
+        ALLOWED_ROLES[server_key] = current_ids
+
+        with open(ALLOWED_ROLES_FILE, "w", encoding="utf-8") as f:
+            json.dump(ALLOWED_ROLES, f, indent=2)
+
+        role_mentions = ", ".join(f"<@&{role_id}>" for role_id in role_ids_to_add)
+        await ctx.send(f"✅ Allowed reserves access for: {role_mentions}")
 
     def _mention_members(self, ctx: commands.Context) -> list[discord.Member]:
         mentioned = []

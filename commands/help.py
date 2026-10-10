@@ -16,12 +16,13 @@ HELP_PAGES_DATA = [
         "title": "🔒 Reserve Commands",
         "description": (
             "• `m!reserves` (`m!r`) - Main command for managing Pokémon reserves in the server.\n"
-            "• `m!r add <pokemon> @user` (`m!r a`) - Adds Pokémon to a user's reserves (Managers/Admins).\n"
-            "• `m!r remove <pokemon> @user` (`m!r r`) - Removes Pokémon from a user's reserves (Managers/Admins).\n"
+            "• `m!r add <pokemon> @user` (`m!r a`) - Adds Pokémon to a user's reserves (Admins/allowed roles).\n"
+            "• `m!r remove <pokemon> @user` (`m!r r`) - Removes Pokémon from a user's reserves (Admins/allowed roles).\n"
             "• `m!r clear` (`m!r c`) - Clears reserves for a specified user or all server reserves.\n"
             "• `m!r search <pokemon>` (`m!r s`) - Searches for users who have reserved specific Pokémon.\n"
             "• `m!r list` (`m!r l`) - Lists all active Pokémon reserves in the server.\n"
-            "• `m!r @user` - Displays all reserved Pokémon for a specific user."
+            "• `m!r @user` - Displays all reserved Pokémon for a specific user.\n"
+            "• `m!allow <roleid1>, <roleid2>` - Admin-only; allows roles to use restricted reserve commands."
         ),
     },
     {
