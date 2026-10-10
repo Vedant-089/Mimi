@@ -19,6 +19,7 @@ HELP_PAGES_DATA = [
             "• `m!r add <pokemon> @user` (`m!r a`) - Adds Pokémon to a user's reserves (Admins/allowed roles).\n"
             "• `m!r remove <pokemon> @user` (`m!r r`) - Removes Pokémon from a user's reserves (Admins/allowed roles).\n"
             "• `m!r remove <pokemon>` (`m!r r`) - Removes Pokémon from every user's reserves (Admins/allowed roles).\n"
+            "• `m!r exchange @user` (`m!r e`) - Exchanges Pokémon from a replied reserve list with that user's reserves (Admins/allowed roles).\n"
             "• `m!r clear` (`m!r c`) - Clears reserves for a specified user or all server reserves.\n"
             "• `m!r search <pokemon>` (`m!r s`) - Searches for users who have reserved specific Pokémon.\n"
             "• `m!r list` (`m!r l`) - Lists all active Pokémon reserves in the server.\n"

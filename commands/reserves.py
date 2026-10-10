@@ -191,9 +191,14 @@ class ReserveCommands(commands.Cog):
             await ctx.send("❌ You need administrator permissions to use this command.")
             return
 
-        requested_ids = [value for value in re.split(r"[\s,]+", role_ids) if value]
+        requested_ids = []
+        for value in re.split(r"[\s,]+", role_ids):
+            if not value:
+                continue
+            mention = re.fullmatch(r"<@&(\d+)>", value)
+            requested_ids.append(mention.group(1) if mention else value)
         if not requested_ids:
-            await ctx.send("❌ Use: `m!allow <roleid1>, <roleid2>`")
+            await ctx.send("❌ Use: `m!allow <roleid1>, <roleid2>` or `m!allow @role`")
             return
 
         invalid_ids = [value for value in requested_ids if not value.isdigit()]
@@ -490,6 +495,125 @@ class ReserveCommands(commands.Cog):
         if invalid_names:
             response += f"\n❌ Invalid: {', '.join(invalid_names)}"
         await ctx.send(response)
+
+    async def get_referenced_message(self, ctx: commands.Context):
+        reference = ctx.message.reference
+        if reference is None or reference.message_id is None:
+            return None
+        if isinstance(reference.resolved, discord.Message):
+            return reference.resolved
+        try:
+            return await ctx.channel.fetch_message(reference.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
+    async def parse_exchange_entries(self, ctx: commands.Context, message: discord.Message):
+        entries = []
+        errors = []
+        mention_pattern = re.compile(r"<@!?(\d+)>")
+
+        for line_number, line in enumerate(message.content.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = re.split(r"\s*-\s*", line, maxsplit=1)
+            mentions = list(mention_pattern.finditer(line))
+            if len(parts) != 2 or len(mentions) != 1:
+                errors.append(f"line {line_number}")
+                continue
+
+            left, right = (part.strip() for part in parts)
+            mention = mentions[0]
+            if mention.start() < line.find("-"):
+                source_id = int(mention.group(1))
+                pokemon_text = right
+            else:
+                source_id = int(mention.group(1))
+                pokemon_text = left
+
+            source = ctx.guild.get_member(source_id)
+            if source is None:
+                try:
+                    source = await ctx.guild.fetch_member(source_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    source = None
+            if source is None:
+                errors.append(f"line {line_number}")
+                continue
+
+            valid_names, invalid_names = expand_reserve_inputs([pokemon_text])
+            if invalid_names or len(valid_names) != 1:
+                errors.append(f"line {line_number}")
+                continue
+
+            entries.append((source, valid_names[0]))
+
+        return entries, errors
+
+    @reserves.command(name="exchange", aliases=["e"])
+    @commands.guild_only()
+    async def exchange(self, ctx: commands.Context, *, args: str):
+        if not await self.ensure_manage_permission(ctx):
+            return
+
+        target, _ = await self.parse_member_and_pokemon(ctx, args)
+        if target is None:
+            return await ctx.send("❌ Mention the user receiving the Pokémon: `m!r e @user`.")
+
+        referenced_message = await self.get_referenced_message(ctx)
+        if referenced_message is None:
+            return await ctx.send("❌ Reply to a message containing `@user - pokemon` before using this command.")
+
+        entries, errors = await self.parse_exchange_entries(ctx, referenced_message)
+        if errors:
+            return await ctx.send(f"❌ Could not read the exchange format on {', '.join(errors)}. Use `@user - pokemon` or `pokemon - @user`.")
+        if not entries:
+            return await ctx.send("❌ The replied message contains no exchange entries.")
+
+        pokemon_names = [pokemon_name for _, pokemon_name in entries]
+        if len(set(pokemon_names)) != len(pokemon_names):
+            return await ctx.send("❌ Each Pokémon can only appear once in the exchange message.")
+
+        target_id = target.id
+        rows = await db.fetch(
+            """
+            SELECT pokemon_name FROM reserve_pings
+            WHERE serverid = $1 AND userid = $2 AND pokemon_name = ANY($3::text[])
+            """,
+            ctx.guild.id, target_id, pokemon_names
+        )
+        available_names = {row["pokemon_name"] for row in rows}
+        missing_names = [name for name in pokemon_names if name not in available_names]
+        if missing_names:
+            return await ctx.send(
+                f"❌ {target.mention} does not have these Pokémon in their reserves: "
+                f"{', '.join(name.title() for name in missing_names)}"
+            )
+
+        source_ids = [source.id for source, _ in entries]
+        await db.execute(
+            """
+            WITH requested(sourceid, pokemon_name) AS (
+                SELECT * FROM unnest($3::bigint[], $4::text[])
+            ), deleted AS (
+                DELETE FROM reserve_pings
+                WHERE serverid = $1 AND userid = $2
+                  AND pokemon_name = ANY($4::text[])
+                RETURNING pokemon_name
+            )
+            INSERT INTO reserve_pings (serverid, userid, pokemon_name)
+            SELECT $1, requested.sourceid, deleted.pokemon_name
+            FROM deleted
+            JOIN requested USING (pokemon_name)
+            ON CONFLICT (serverid, userid, pokemon_name) DO NOTHING
+            """,
+            ctx.guild.id, target_id, source_ids, pokemon_names
+        )
+        invalidate_reserve_cache()
+
+        exchanged = ", ".join(name.title() for name in pokemon_names)
+        await ctx.send(f"🔄 Exchanged {exchanged} from {target.mention} to the users in the replied message.")
 
     @reserves.command(name="search", aliases=["s"])
     @commands.guild_only()
