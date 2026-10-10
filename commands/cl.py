@@ -78,6 +78,28 @@ def expand_collection_inputs(input_names):
     return sorted(expanded), invalid
 
 
+def expand_global_collection_inputs(input_names):
+    expanded = set()
+    invalid = []
+
+    for raw in input_names:
+        key = raw.strip().lower()
+        if not key:
+            continue
+
+        if key in GROUP_ALIASES or key.startswith("all "):
+            invalid.append(key)
+            continue
+
+        resolved = resolve_alias(key)
+        if resolved in VALID_POKEMON:
+            expanded.add(resolved)
+        else:
+            invalid.append(key)
+
+    return sorted(expanded), invalid
+
+
 class CollectionListView(discord.ui.View):
     def __init__(self, pages):
         super().__init__(timeout=180)
@@ -112,6 +134,65 @@ class CollectionCommands(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         await ensure_ping_tables(db)
+
+    @commands.group(name="gcl", invoke_without_command=True)
+    async def global_collection(self, ctx):
+        await ctx.send("Usage: `m!gcl add/remove <pokemon>`")
+
+    @global_collection.command(name="add")
+    async def global_add(self, ctx, *, names: str):
+        input_names = [name.strip().lower() for name in names.split(",") if name.strip()]
+        valid_names, invalid = expand_global_collection_inputs(input_names)
+
+        if not valid_names:
+            return await ctx.send("❌ No valid Pokémon names provided. Categories and `all <pokemon>` are not supported by global collection.")
+
+        server_ids = [guild.id for guild in self.bot.guilds]
+        for serverid in server_ids:
+            await db.execute(
+                """
+                INSERT INTO collection_pings (serverid, userid, pokemon_name)
+                SELECT $1, $2, UNNEST($3::text[])
+                ON CONFLICT (serverid, userid, pokemon_name) DO NOTHING
+                """,
+                serverid, ctx.author.id, valid_names
+            )
+        invalidate_collection_cache()
+
+        preview = ", ".join(name.title() for name in valid_names[:25])
+        if len(valid_names) > 25:
+            preview += f", ... (+{len(valid_names) - 25} more)"
+        response = f"✅ Added to your collection in {len(server_ids)} servers: {preview}"
+        if invalid:
+            response += f"\n❌ Invalid or unsupported: {', '.join(invalid)}"
+        await ctx.send(response)
+
+    @global_collection.command(name="remove")
+    async def global_remove(self, ctx, *, names: str):
+        input_names = [name.strip().lower() for name in names.split(",") if name.strip()]
+        valid_names, invalid = expand_global_collection_inputs(input_names)
+
+        if not valid_names:
+            return await ctx.send("❌ No valid Pokémon names provided. Categories and `all <pokemon>` are not supported by global collection.")
+
+        server_ids = [guild.id for guild in self.bot.guilds]
+        for serverid in server_ids:
+            await db.execute(
+                """
+                DELETE FROM collection_pings
+                WHERE serverid = $1 AND userid = $2 AND pokemon_name = ANY($3::text[])
+                """,
+                serverid, ctx.author.id, valid_names
+            )
+        invalidate_collection_cache()
+
+        preview = ", ".join(name.title() for name in valid_names[:25])
+        if len(valid_names) > 25:
+            preview += f", ... (+{len(valid_names) - 25} more)"
+        response = f"🗑️ Removed from your collection in {len(server_ids)} servers: {preview}"
+        if invalid:
+            response += f"\n❌ Invalid or unsupported: {', '.join(invalid)}"
+        await ctx.send(response)
 
     @commands.group(name="cl", invoke_without_command=True)
     @commands.guild_only()
