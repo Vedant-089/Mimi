@@ -67,35 +67,44 @@ class ShinyHunt(commands.Cog):
         log.debug("Ensuring ping tables exist …")
         await ensure_ping_tables(self.bot.db)
 
-    async def set_shiny_hunt(self, user_id: int, pokemon: str):
-        """Insert or update pokemon_name for a user and log status."""
-        query = (
-            """
+    async def set_shiny_hunt(self, user_id: int, server_id: int, pokemon: str):
+        query = """
+            INSERT INTO server_shiny_hunt (serverid, userid, pokemon_name)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (serverid, userid) DO UPDATE
+            SET pokemon_name = EXCLUDED.pokemon_name;
+        """
+        status = await self.bot.db.execute(query, server_id, user_id, pokemon)
+        invalidate_hunt_cache()
+        log.info("DB status after setting server hunt for %s in %s → %s: %s", user_id, server_id, pokemon, status)
+
+    async def set_global_shiny_hunt(self, user_id: int, pokemon: str):
+        query = """
             INSERT INTO shiny_hunt (userid, pokemon_name)
             VALUES ($1, $2)
             ON CONFLICT (userid) DO UPDATE
             SET pokemon_name = EXCLUDED.pokemon_name;
-            """
-        )
+        """
         status = await self.bot.db.execute(query, user_id, pokemon)
         invalidate_hunt_cache()
-        log.info("DB status after setting hunt for %s → %s: %s", user_id, pokemon, status)
+        log.info("DB status after setting global hunt for %s → %s: %s", user_id, pokemon, status)
 
     # ---------------------------------------------------------------------
     # Command
     # ---------------------------------------------------------------------
 
-    @commands.command(name="sh", aliases=["shinyhunt"])
-    async def shiny_hunt(self, ctx: commands.Context, *, pokemon=None):
-        """Register a shiny hunt if *pokemon* is on the official list, or show current hunt."""
+    async def handle_shiny_hunt(self, ctx: commands.Context, pokemon: str | None, global_scope: bool):
         log.debug("Command invoked by %s (%s) with arg: %s", ctx.author, ctx.author.id, pokemon)
 
-        # ------------------------------------------------------------
-        # Case 1 — user typed just m!sh → show current hunt
-        # ------------------------------------------------------------
+        if global_scope:
+            current_query = "SELECT pokemon_name FROM shiny_hunt WHERE userid = $1;"
+            current_args = (ctx.author.id,)
+        else:
+            current_query = "SELECT pokemon_name FROM server_shiny_hunt WHERE serverid = $1 AND userid = $2;"
+            current_args = (ctx.guild.id, ctx.author.id)
+
         if pokemon is None:
-            query = "SELECT pokemon_name FROM shiny_hunt WHERE userid = $1;"
-            row = await self.bot.db.fetchrow(query, ctx.author.id)
+            row = await self.bot.db.fetchrow(current_query, *current_args)
 
             if row and row['pokemon_name']:
                 current_hunt = row['pokemon_name']
@@ -109,26 +118,29 @@ class ShinyHunt(commands.Cog):
                 await ctx.reply("❌ You are not hunting any Pokémon currently.")
             return
 
-        # ------------------------------------------------------------
-        # Case 2 — user typed m!sh none/reset → clear shiny hunt
-        # ------------------------------------------------------------
         key = str(pokemon).lower().strip()
 
         if key in ["none", "reset", "clear", "remove", "null", "nothing"]:
-            reset_query = """
-                INSERT INTO shiny_hunt (userid, pokemon_name)
-                VALUES ($1, NULL)
-                ON CONFLICT (userid) DO UPDATE
-                SET pokemon_name = NULL;
-            """
+            if global_scope:
+                reset_query = """
+                    INSERT INTO shiny_hunt (userid, pokemon_name)
+                    VALUES ($1, NULL)
+                    ON CONFLICT (userid) DO UPDATE SET pokemon_name = NULL;
+                """
+                reset_args = (ctx.author.id,)
+            else:
+                reset_query = """
+                    INSERT INTO server_shiny_hunt (serverid, userid, pokemon_name)
+                    VALUES ($1, $2, NULL)
+                    ON CONFLICT (serverid, userid) DO UPDATE SET pokemon_name = NULL;
+                """
+                reset_args = (ctx.guild.id, ctx.author.id)
 
-            await self.bot.db.execute(reset_query, ctx.author.id)
+            await self.bot.db.execute(reset_query, *reset_args)
+            invalidate_hunt_cache()
             await ctx.reply("🧹 Your shiny hunt has been **reset**. You're now hunting nothing.")
             return
 
-        # ------------------------------------------------------------
-        # Case 3 — normal shiny hunt set (validate Pokémon & aliases)
-        # ------------------------------------------------------------
         resolved_key = resolve_alias(key)
 
         if key.startswith("all "):
@@ -145,12 +157,24 @@ class ShinyHunt(commands.Cog):
             return
 
         try:
-            await self.set_shiny_hunt(ctx.author.id, resolved_key)
+            if global_scope:
+                await self.set_global_shiny_hunt(ctx.author.id, resolved_key)
+            else:
+                await self.set_shiny_hunt(ctx.author.id, ctx.guild.id, resolved_key)
             display_name = resolved_key[4:].title() + " (all)" if resolved_key.startswith("all ") else resolved_key.title()
             await ctx.reply(f"✅ Shiny hunt updated to **{display_name}**!")
         except Exception as e:
             log.exception("Failed to set shiny hunt for %s → %s", ctx.author.id, resolved_key)
             await ctx.reply("⚠️ An error occurred while saving your shiny hunt. Please try again later.")
+
+    @commands.command(name="sh", aliases=["shinyhunt"])
+    @commands.guild_only()
+    async def shiny_hunt(self, ctx: commands.Context, *, pokemon=None):
+        await self.handle_shiny_hunt(ctx, pokemon, global_scope=False)
+
+    @commands.command(name="globalshinyhunt", aliases=["gsh"])
+    async def global_shiny_hunt(self, ctx: commands.Context, *, pokemon=None):
+        await self.handle_shiny_hunt(ctx, pokemon, global_scope=True)
 
     # ---------------------------------------------------------------------
     # Listeners

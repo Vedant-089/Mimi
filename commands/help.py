@@ -6,10 +6,12 @@ HELP_PAGES_DATA = [
     {
         "title": "✨ Shiny Hunt Commands",
         "description": (
-            "• `m!shinyhunt` (`m!sh`) - Sets user's Shiny Hunt to that specific Pokémon globally.\n"
-            "• `m!sh <pokemon>` - Sets your global shiny hunt target to a specified Pokémon.\n"
-            "• `m!sh` - Displays your current active shiny hunt target.\n"
-            "• `m!sh reset` / `none` / `clear` / `remove` - Resets and clears your current shiny hunt target."
+            "• `m!shinyhunt` (`m!sh`) - Sets your shiny hunt for this server.\n"
+            "• `m!sh <pokemon>` - Sets your server-specific shiny hunt target.\n"
+            "• `m!gsh <pokemon>` (`m!globalshinyhunt`) - Sets your shiny hunt globally in every server.\n"
+            "• `m!sh` / `m!gsh` - Displays your current server or global hunt.\n"
+            "• `m!sh reset` / `none` / `clear` / `remove` - Resets your hunt for this server.\n"
+            "• `m!gsh reset` / `none` / `clear` / `remove` - Resets your global hunt."
         ),
     },
     {

@@ -5,6 +5,7 @@ from collections import defaultdict
 
 # Global caches and locks
 _hunt_cache = defaultdict(list)
+_server_hunt_cache = defaultdict(lambda: defaultdict(list))
 _cache_last_updated = 0
 _cache_refresh_interval = 15  # seconds
 _cache_lock = asyncio.Lock()
@@ -52,6 +53,14 @@ PING_TABLES_SQL = [
         pokemon_name TEXT,
         shinyafk BOOLEAN DEFAULT FALSE,
         colafk BOOLEAN DEFAULT FALSE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS server_shiny_hunt (
+        serverid BIGINT NOT NULL,
+        userid BIGINT NOT NULL,
+        pokemon_name TEXT,
+        PRIMARY KEY (serverid, userid)
     );
     """,
     """
@@ -145,21 +154,34 @@ def resolve_alias(name: str) -> str:
 # ------------------------
 
 async def refresh_hunt_cache(db_instance):
-    global _hunt_cache, _cache_last_updated
+    global _hunt_cache, _server_hunt_cache, _cache_last_updated
     async with _cache_lock:
         try:
-            rows = await db_instance.fetch("""
+            global_rows = await db_instance.fetch("""
                 SELECT TRIM(pokemon_name) AS name, userid
                 FROM shiny_hunt
                 WHERE shinyafk = false
                   AND pokemon_name IS NOT NULL
             """)
+            server_rows = await db_instance.fetch("""
+                SELECT server_hunt.serverid, TRIM(server_hunt.pokemon_name) AS name, server_hunt.userid
+                FROM server_shiny_hunt AS server_hunt
+                LEFT JOIN shiny_hunt AS user_settings ON user_settings.userid = server_hunt.userid
+                WHERE COALESCE(user_settings.shinyafk, false) = false
+                  AND server_hunt.pokemon_name IS NOT NULL
+            """)
             temp_cache = defaultdict(list)
-            for row in rows:
+            temp_server_cache = defaultdict(lambda: defaultdict(list))
+            for row in global_rows:
                 name = row["name"]
                 if name:
                     temp_cache[name.lower()].append(row["userid"])
+            for row in server_rows:
+                name = row["name"]
+                if name:
+                    temp_server_cache[row["serverid"]][name.lower()].append(row["userid"])
             _hunt_cache = temp_cache
+            _server_hunt_cache = temp_server_cache
             _cache_last_updated = time.time()
         except Exception as e:
             print("❌ DB Cache Refresh Error:", e)
@@ -171,7 +193,26 @@ def invalidate_hunt_cache():
         _cache_last_updated = 0.001
 
 
-async def get_users_hunting(pokemon_name: str, db_instance):
+def _get_hunt_user_ids(cache, pokemon_name: str):
+    name = pokemon_name.lower()
+    base_name = _form_to_base.get(name, name)
+    user_ids = set(cache.get(name, []))
+
+    user_ids.update(cache.get(f"all {base_name}", []))
+
+    if base_name in _forms_mapping:
+        user_ids.update(cache.get(base_name, []))
+        for form in _forms_mapping[base_name]:
+            user_ids.update(cache.get(form, []))
+
+    return user_ids
+
+
+async def get_users_hunting(pokemon_name: str, guild_id=None, db_instance=None):
+    if db_instance is None:
+        db_instance = guild_id
+        guild_id = None
+
     now = time.time()
     if _cache_last_updated == 0:
         await refresh_hunt_cache(db_instance)
@@ -179,18 +220,9 @@ async def get_users_hunting(pokemon_name: str, db_instance):
         if not _cache_lock.locked():
             asyncio.create_task(refresh_hunt_cache(db_instance))
 
-    name = pokemon_name.lower()
-    base_name = _form_to_base.get(name, name)
-    user_ids = set(_hunt_cache.get(name, []))
-
-    # A hunt stored as "all <base>" covers the base and every known form.
-    user_ids.update(_hunt_cache.get(f"all {base_name}", []))
-
-    # A regular base hunt also covers its known forms.
-    if base_name in _forms_mapping:
-        user_ids.update(_hunt_cache.get(base_name, []))
-        for form in _forms_mapping[base_name]:
-            user_ids.update(_hunt_cache.get(form, []))
+    user_ids = _get_hunt_user_ids(_hunt_cache, pokemon_name)
+    if guild_id is not None:
+        user_ids.update(_get_hunt_user_ids(_server_hunt_cache.get(guild_id, {}), pokemon_name))
 
     return list(user_ids)
 

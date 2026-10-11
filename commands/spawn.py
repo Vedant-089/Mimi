@@ -756,7 +756,7 @@ class SpawnPredictor(commands.Cog):
             lookup_start = time.perf_counter()
 
             hunters, collectors, reserves, type_ping_users, region_ping_users = await asyncio.gather(
-                get_users_hunting(name, db),
+                get_users_hunting(name, message.guild.id, db),
                 get_users_collecting(name, message.guild.id, db),
                 get_users_reserved(name, message.guild.id, db),
                 get_users_type_ping(name, message.guild.id, db),
