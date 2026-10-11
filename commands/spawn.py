@@ -38,12 +38,6 @@ CONF_THRESHOLD = 0.30  # 30%
 RECOG_PATH = Path("recog.json")
 TYPE_SETTINGS_PATH = Path("type_settings.json")
 TYPE_CHANNELS_PATH = Path("type_channels.json")
-CATCH_RE = re.compile(
-    r"^Congratulations\s+<@!?(\d+)>!\s+You caught a Level",
-    re.IGNORECASE,
-)
-
-
 if not os.path.exists(MODEL_PATH):
     print(f"Downloading {MODEL_PATH}...")
     urllib.request.urlretrieve(
@@ -614,26 +608,6 @@ class SpawnPredictor(commands.Cog):
         message: discord.Message
     ):
 
-        # If Poketwo posted a catch confirmation,
-        # remove this channel from saved type channels
-        if (
-            message.author.id == POKETWO_BOT_ID
-            and message.content
-            and CATCH_RE.search(message.content)
-        ):
-            if self.is_type_enabled():
-                try:
-                    await self._remove_channel_from_all_types(
-                        message.channel.id
-                    )
-
-                except Exception as e:
-                    print(
-                        f"⚠️ Failed to remove channel after catch: {e}"
-                    )
-
-            return
-
         if (
             message.author.id != POKETWO_BOT_ID
             or not message.embeds
@@ -972,43 +946,6 @@ class SpawnPredictor(commands.Cog):
                 "⚠️ Prediction error:",
                 e
             )
-
-    async def _remove_channel_from_all_types(
-        self,
-        channel_id: int
-    ):
-        async with self.type_channels_lock:
-
-            data = await asyncio.to_thread(
-                self._read_type_channel_data
-            )
-
-            removed_types = []
-            changed = False
-
-            for type_name in list(data.keys()):
-
-                if channel_id in data[type_name]:
-
-                    data[type_name] = [
-                        cid
-                        for cid in data[type_name]
-                        if cid != channel_id
-                    ]
-
-                    removed_types.append(
-                        type_name
-                    )
-
-                    changed = True
-
-            if changed:
-                await asyncio.to_thread(
-                    self._write_type_channel_data,
-                    data
-                )
-
-        return removed_types
 
     def _record_spawn_timing(self, inference_ms: float, response_ms: float):
         for key, value in (
