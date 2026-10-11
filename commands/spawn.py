@@ -25,6 +25,7 @@ from functions import (
     get_users_type_ping,
     get_users_region_ping,
     get_server_naming_enabled,
+    get_server_shiny_hunt_priority,
     update_and_check_incense,
     parse_incense_footer,
     warm_ping_caches,
@@ -756,13 +757,14 @@ class SpawnPredictor(commands.Cog):
 
             lookup_start = time.perf_counter()
 
-            hunters, collectors, reserves, type_ping_users, region_ping_users, naming_enabled = await asyncio.gather(
+            hunters, collectors, reserves, type_ping_users, region_ping_users, naming_enabled, shiny_hunt_prio = await asyncio.gather(
                 get_users_hunting(name, message.guild.id, db),
                 get_users_collecting(name, message.guild.id, db),
                 get_users_reserved(name, message.guild.id, db),
                 get_users_type_ping(name, message.guild.id, db),
                 get_users_region_ping(name, message.guild.id, db),
                 get_server_naming_enabled(message.guild.id, db),
+                get_server_shiny_hunt_priority(message.guild.id, db),
             )
 
             types = self.get_pokemon_types(name)
@@ -888,7 +890,7 @@ class SpawnPredictor(commands.Cog):
                         )
                     )
 
-                if collectors:
+                if collectors and (not shiny_hunt_prio or not hunters):
                     reply_lines.append(
                         "Collection Pings: "
                         + ", ".join(

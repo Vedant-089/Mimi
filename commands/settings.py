@@ -15,7 +15,7 @@ async def get_server_settings(server_id: int):
     )
     return await db.fetchrow(
         """
-        SELECT naming, only_ping, main_starboard, shiny_starboard, gmax_starboard
+        SELECT naming, shiny_hunt_prio, main_starboard, shiny_starboard, gmax_starboard
         FROM server_settings
         WHERE serverid = $1
         """,
@@ -23,12 +23,12 @@ async def get_server_settings(server_id: int):
     )
 
 class ServerSettingsView(discord.ui.LayoutView):
-    def __init__(self, author_id: int, server_id: int, naming_enabled: bool = True, only_pings: bool = False):
+    def __init__(self, author_id: int, server_id: int, naming_enabled: bool = True, shiny_hunt_prio: bool = False):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.server_id = server_id
         self.naming_enabled = naming_enabled
-        self.only_pings = only_pings
+        self.shiny_hunt_prio = shiny_hunt_prio
 
         self.naming_button = discord.ui.Button(
             label="Open",
@@ -88,7 +88,7 @@ class ServerSettingsView(discord.ui.LayoutView):
                 self.author_id,
                 self.server_id,
                 self.naming_enabled,
-                self.only_pings,
+                self.shiny_hunt_prio,
             )
         )
 
@@ -120,18 +120,18 @@ class ServerSettings(commands.Cog):
                 ctx.author.id,
                 ctx.guild.id,
                 settings["naming"],
-                settings["only_ping"],
+                settings["shiny_hunt_prio"],
             )
         )
 
 
 class NamingSettingsView(discord.ui.LayoutView):
-    def __init__(self, author_id: int, server_id: int, naming_enabled: bool = True, only_pings: bool = False):
+    def __init__(self, author_id: int, server_id: int, naming_enabled: bool = True, shiny_hunt_prio: bool = False):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.server_id = server_id
         self.naming_enabled = naming_enabled
-        self.only_pings = only_pings
+        self.shiny_hunt_prio = shiny_hunt_prio
         self._build_layout()
 
     def _build_layout(self):
@@ -144,12 +144,12 @@ class NamingSettingsView(discord.ui.LayoutView):
         )
         naming_button.callback = self.toggle_naming
 
-        only_pings_button = discord.ui.Button(
-            label="On" if self.only_pings else "Off",
-            style=discord.ButtonStyle.success if self.only_pings else discord.ButtonStyle.danger,
-            custom_id="settings:only-pings:toggle",
+        shiny_hunt_prio_button = discord.ui.Button(
+            label="On" if self.shiny_hunt_prio else "Off",
+            style=discord.ButtonStyle.success if self.shiny_hunt_prio else discord.ButtonStyle.danger,
+            custom_id="settings:shiny-hunt-prio:toggle",
         )
-        only_pings_button.callback = self.toggle_only_pings
+        shiny_hunt_prio_button.callback = self.toggle_shiny_hunt_prio
 
         back_button = discord.ui.Button(
             label="Back",
@@ -159,7 +159,7 @@ class NamingSettingsView(discord.ui.LayoutView):
         back_button.callback = self.back
 
         naming_status = "✅ **Enabled**" if self.naming_enabled else "❌ **Disabled**"
-        only_pings_status = "✅ **Enabled**" if self.only_pings else "❌ **Disabled**"
+        shiny_hunt_prio_status = "✅ **Enabled**" if self.shiny_hunt_prio else "❌ **Disabled**"
 
         self.add_item(
             discord.ui.Container(
@@ -172,8 +172,8 @@ class NamingSettingsView(discord.ui.LayoutView):
                     accessory=naming_button,
                 ),
                 discord.ui.Section(
-                    f"**Only-Pings**\n{only_pings_status}\n-# Only name spawns with hunt, collection, or reserve pings.",
-                    accessory=only_pings_button,
+                    f"**Shiny Hunt Priority**\n{shiny_hunt_prio_status}\n-# Give shiny hunt pings priority over collection pings. Reserves remain highest priority.",
+                    accessory=shiny_hunt_prio_button,
                 ),
                 discord.ui.Separator(),
                 discord.ui.ActionRow(back_button),
@@ -211,13 +211,13 @@ class NamingSettingsView(discord.ui.LayoutView):
         self._build_layout()
         await interaction.response.edit_message(view=self)
 
-    async def toggle_only_pings(self, interaction: discord.Interaction):
+    async def toggle_shiny_hunt_prio(self, interaction: discord.Interaction):
         if not await self._check_user(interaction) or not await self._check_admin(interaction):
             return
-        self.only_pings = not self.only_pings
+        self.shiny_hunt_prio = not self.shiny_hunt_prio
         await db.execute(
-            "UPDATE server_settings SET only_ping = $1 WHERE serverid = $2",
-            self.only_pings,
+            "UPDATE server_settings SET shiny_hunt_prio = $1 WHERE serverid = $2",
+            self.shiny_hunt_prio,
             self.server_id,
         )
         self._build_layout()
@@ -231,7 +231,7 @@ class NamingSettingsView(discord.ui.LayoutView):
                 self.author_id,
                 self.server_id,
                 self.naming_enabled,
-                self.only_pings,
+                self.shiny_hunt_prio,
             )
         )
 
@@ -371,7 +371,7 @@ class StarboardSettingsView(discord.ui.LayoutView):
                 self.author_id,
                 self.server_id,
                 settings["naming"],
-                settings["only_ping"],
+                settings["shiny_hunt_prio"],
             )
         )
 

@@ -67,7 +67,7 @@ PING_TABLES_SQL = [
     CREATE TABLE IF NOT EXISTS server_settings (
         serverid BIGINT PRIMARY KEY,
         naming BOOLEAN NOT NULL DEFAULT TRUE,
-        only_ping BOOLEAN NOT NULL DEFAULT FALSE,
+        shiny_hunt_prio BOOLEAN NOT NULL DEFAULT FALSE,
         main_starboard BIGINT,
         shiny_starboard BIGINT,
         gmax_starboard BIGINT
@@ -97,6 +97,22 @@ async def ensure_ping_tables(db_instance):
     await db_instance.execute(
         "ALTER TABLE shiny_hunt ADD COLUMN IF NOT EXISTS colafk BOOLEAN DEFAULT FALSE;"
     )
+    await db_instance.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'server_settings' AND column_name = 'only_ping'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'server_settings' AND column_name = 'shiny_hunt_prio'
+            ) THEN
+                ALTER TABLE server_settings RENAME COLUMN only_ping TO shiny_hunt_prio;
+            END IF;
+        END $$;
+        """
+    )
     await db_instance.execute("ALTER TABLE shiny_hunt DROP COLUMN IF EXISTS type_pings;")
     await db_instance.execute("ALTER TABLE shiny_hunt DROP COLUMN IF EXISTS region_pings;")
     await db_instance.execute("DROP TABLE IF EXISTS collection_afk;")
@@ -117,6 +133,14 @@ async def get_server_naming_enabled(server_id: int, db_instance) -> bool:
         server_id,
     )
     return True if value is None else bool(value)
+
+
+async def get_server_shiny_hunt_priority(server_id: int, db_instance) -> bool:
+    value = await db_instance.fetchval(
+        "SELECT shiny_hunt_prio FROM server_settings WHERE serverid = $1",
+        server_id,
+    )
+    return bool(value) if value is not None else False
 
 # Load forms.json and prepare mapping
 with open("forms.json", "r") as f:
