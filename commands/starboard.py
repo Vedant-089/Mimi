@@ -9,7 +9,7 @@ from discord.ext import commands
 from database import db
 
 
-POKETWO_BOT_ID = 716390085896962058
+POKETWO_BOT_ID = 760720549092917248
 TYPE_SETTINGS_PATH = Path("type_settings.json")
 TYPE_CHANNELS_PATH = Path("type_channels.json")
 CATCH_RE = re.compile(
