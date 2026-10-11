@@ -9,7 +9,7 @@ from discord.ext import commands
 from database import db
 
 
-POKETWO_BOT_ID = 760720549092917248
+POKETWO_BOT_ID = 716390085896962058
 TYPE_SETTINGS_PATH = Path("type_settings.json")
 TYPE_CHANNELS_PATH = Path("type_channels.json")
 CATCH_RE = re.compile(
@@ -24,6 +24,18 @@ CATCH_DETAILS_RE = re.compile(
 GIGANTAMAX_MARKER = "gigantamax factor"
 SHINY_MARKER = "these colors seem unusual"
 GIGANTAMAX_EMOJI = "<:gigantamax:1558878072441151558>"
+GENDER_EMOJI_RE = re.compile(r"<a?:(female|male):[0-9]+>", re.IGNORECASE)
+
+
+def format_pokemon_name(name: str) -> str:
+    gender_symbols = {
+        "female": "♀️",
+        "male": "♂️",
+    }
+    return GENDER_EMOJI_RE.sub(
+        lambda match: gender_symbols[match.group(1).lower()],
+        name,
+    ).strip()
 
 
 class Starboard(commands.Cog):
@@ -87,7 +99,7 @@ class Starboard(commands.Cog):
 
         catcher_id = int(match.group(1))
         level = int(match.group(2))
-        pokemon_name = match.group(3).strip()
+        pokemon_name = format_pokemon_name(match.group(3))
         iv = float(match.group(4))
         content_lower = message.content.lower()
 

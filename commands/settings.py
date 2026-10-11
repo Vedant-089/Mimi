@@ -253,6 +253,8 @@ class StarboardSettingsView(discord.ui.LayoutView):
             "placeholder": "Select main starboard channel",
             "channel_types": [discord.ChannelType.text],
             "custom_id": "settings:starboard:main-channel",
+            "min_values": 0,
+            "required": False,
         }
         if self.main_starboard is not None:
             main_select_kwargs["default_values"] = [discord.Object(id=int(self.main_starboard))]
@@ -263,6 +265,8 @@ class StarboardSettingsView(discord.ui.LayoutView):
             "placeholder": "Select shiny board channel",
             "channel_types": [discord.ChannelType.text],
             "custom_id": "settings:starboard:shiny-channel",
+            "min_values": 0,
+            "required": False,
         }
         if self.shiny_starboard is not None:
             shiny_select_kwargs["default_values"] = [discord.Object(id=int(self.shiny_starboard))]
@@ -273,6 +277,8 @@ class StarboardSettingsView(discord.ui.LayoutView):
             "placeholder": "Select Gmax board channel",
             "channel_types": [discord.ChannelType.text],
             "custom_id": "settings:starboard:gmax-channel",
+            "min_values": 0,
+            "required": False,
         }
         if self.gmax_starboard is not None:
             gmax_select_kwargs["default_values"] = [discord.Object(id=int(self.gmax_starboard))]
@@ -334,8 +340,6 @@ class StarboardSettingsView(discord.ui.LayoutView):
         if not await self._check_user(interaction) or not await self._check_admin(interaction):
             return
         channel = selector.values[0] if selector.values else None
-        if channel is None:
-            return await interaction.response.send_message("❌ No channel was selected.", ephemeral=True)
 
         column_by_board = {
             "Main Starboard": "main_starboard",
@@ -344,12 +348,12 @@ class StarboardSettingsView(discord.ui.LayoutView):
         }
         await db.execute(
             f"UPDATE server_settings SET {column_by_board[board_name]} = $1 WHERE serverid = $2",
-            channel.id,
+            channel.id if channel is not None else None,
             self.server_id,
         )
-        channel_name = channel.mention if channel is not None else "that channel"
+        channel_name = channel.mention if channel is not None else "no channel"
         await interaction.response.send_message(
-            f"✅ {board_name} channel saved: {channel_name}",
+            f"✅ {board_name} channel saved: {channel_name}.",
             ephemeral=True,
         )
 
