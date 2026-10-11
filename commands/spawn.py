@@ -24,6 +24,7 @@ from functions import (
     get_users_reserved,
     get_users_type_ping,
     get_users_region_ping,
+    get_server_naming_enabled,
     update_and_check_incense,
     parse_incense_footer,
     warm_ping_caches,
@@ -755,12 +756,13 @@ class SpawnPredictor(commands.Cog):
 
             lookup_start = time.perf_counter()
 
-            hunters, collectors, reserves, type_ping_users, region_ping_users = await asyncio.gather(
+            hunters, collectors, reserves, type_ping_users, region_ping_users, naming_enabled = await asyncio.gather(
                 get_users_hunting(name, message.guild.id, db),
                 get_users_collecting(name, message.guild.id, db),
                 get_users_reserved(name, message.guild.id, db),
                 get_users_type_ping(name, message.guild.id, db),
                 get_users_region_ping(name, message.guild.id, db),
+                get_server_naming_enabled(message.guild.id, db),
             )
 
             types = self.get_pokemon_types(name)
@@ -843,9 +845,9 @@ class SpawnPredictor(commands.Cog):
             # PREDICTION MESSAGE
             # ==================================================
 
-            reply_lines = [
-                f"{display_name}: {confidence:.2%}",
-            ]
+            reply_lines = []
+            if naming_enabled:
+                reply_lines.append(f"{display_name}: {confidence:.2%}")
 
             # ==================================================
             # RESERVE OVERRIDE
@@ -945,13 +947,13 @@ class SpawnPredictor(commands.Cog):
                         )
                     )
 
-            reply_lines.append(
-                f"Copy-Command: `<@{POKETWO_BOT_ID}> c {name}`"
-            )
+            if naming_enabled:
+                reply_lines.append(
+                    f"Copy-Command: `<@{POKETWO_BOT_ID}> c {name}`"
+                )
 
-            await message.channel.send(
-                "\n".join(reply_lines)
-            )
+            if reply_lines:
+                await message.channel.send("\n".join(reply_lines))
 
             lookup_ms = (time.perf_counter() - lookup_start) * 1000
             print(

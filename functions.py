@@ -110,6 +110,14 @@ async def ensure_ping_tables(db_instance):
         "CREATE INDEX IF NOT EXISTS reserve_pings_server_pokemon_idx ON reserve_pings (serverid, pokemon_name);"
     )
 
+
+async def get_server_naming_enabled(server_id: int, db_instance) -> bool:
+    value = await db_instance.fetchval(
+        "SELECT naming FROM server_settings WHERE serverid = $1",
+        server_id,
+    )
+    return True if value is None else bool(value)
+
 # Load forms.json and prepare mapping
 with open("forms.json", "r") as f:
     _forms_mapping = json.load(f)
