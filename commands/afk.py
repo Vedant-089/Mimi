@@ -39,7 +39,6 @@ class AFKButtonView(discord.ui.LayoutView):
                     f"**Shiny Hunt Pings**\n{hunt_status}",
                     accessory=hunt_button,
                 ),
-                discord.ui.Separator(),
                 discord.ui.Section(
                     f"**Collection Pings**\n{collection_status}",
                     accessory=collection_button,
