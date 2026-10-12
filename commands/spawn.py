@@ -925,7 +925,7 @@ class SpawnPredictor(commands.Cog):
 
             if naming_enabled:
                 reply_lines.append(
-                    f"Copy-Command: `<@Pokétwo#8236 c {name}`"
+                    f"Copy-Command: `@Pokétwo#8236 c {name}`"
                 )
 
             if reply_lines:
