@@ -3,28 +3,50 @@ from discord.ext import commands
 from database import db
 from functions import ensure_ping_tables, invalidate_collection_cache, invalidate_hunt_cache
 
-class AFKButtonView(discord.ui.View):
+class AFKButtonView(discord.ui.LayoutView):
     def __init__(self, user_id, shinyafk: bool, colafk: bool):
         super().__init__(timeout=None)
         self.user_id = user_id
+        self.shinyafk = bool(shinyafk)
+        self.colafk = bool(colafk)
+        self._build_layout()
 
-        # Invert the logic here — red = AFK = True
-        self.hunt_button = discord.ui.Button(
-            label="Hunt Ping",
-            style=discord.ButtonStyle.danger if shinyafk else discord.ButtonStyle.success,
-            custom_id="afk_hunt"
+    def _build_layout(self):
+        self.clear_items()
+
+        hunt_button = discord.ui.Button(
+            label="Toggle",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"afk:{self.user_id}:hunt",
         )
-        self.collection_button = discord.ui.Button(
-            label="Collection Ping",
-            style=discord.ButtonStyle.danger if colafk else discord.ButtonStyle.success,
-            custom_id="afk_collection"
+        hunt_button.callback = self.toggle_hunt
+
+        collection_button = discord.ui.Button(
+            label="Toggle",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"afk:{self.user_id}:collection",
         )
+        collection_button.callback = self.toggle_collection
 
-        self.add_item(self.hunt_button)
-        self.add_item(self.collection_button)
+        hunt_status = "✅ **Enabled**" if self.shinyafk else "❌ **Disabled**"
+        collection_status = "✅ **Enabled**" if self.colafk else "❌ **Disabled**"
 
-        self.hunt_button.callback = self.toggle_hunt
-        self.collection_button.callback = self.toggle_collection
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# AFK Status"),
+                discord.ui.Separator(),
+                discord.ui.Section(
+                    f"**Shiny Hunt Pings**\n{hunt_status}",
+                    accessory=hunt_button,
+                ),
+                discord.ui.Separator(),
+                discord.ui.Section(
+                    f"**Collection Pings**\n{collection_status}",
+                    accessory=collection_button,
+                ),
+                accent_color=discord.Color.from_rgb(47, 49, 54),
+            )
+        )
 
     async def toggle_hunt(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -42,7 +64,8 @@ class AFKButtonView(discord.ui.View):
         )
         invalidate_hunt_cache()
 
-        self.hunt_button.style = discord.ButtonStyle.danger if new_val else discord.ButtonStyle.success
+        self.shinyafk = new_val
+        self._build_layout()
         await interaction.response.edit_message(view=self)
 
     async def toggle_collection(self, interaction: discord.Interaction):
@@ -61,7 +84,8 @@ class AFKButtonView(discord.ui.View):
         )
         invalidate_collection_cache()
 
-        self.collection_button.style = discord.ButtonStyle.danger if new_val else discord.ButtonStyle.success
+        self.colafk = new_val
+        self._build_layout()
         await interaction.response.edit_message(view=self)
 
 class AFK(commands.Cog):
@@ -85,14 +109,8 @@ class AFK(commands.Cog):
         shinyafk = await db.fetchval("SELECT shinyafk FROM shiny_hunt WHERE userid = $1", user_id)
         colafk = await db.fetchval("SELECT colafk FROM shiny_hunt WHERE userid = $1", user_id)
 
-        embed = discord.Embed(
-            title="AFK Status",
-            description="Hunt AFK and Collection AFK are both global.\nCollection lists stay per server.\n\nRed = AFK ON\nGreen = AFK OFF",
-            color=discord.Color.purple()
-        )
-
         view = AFKButtonView(user_id, shinyafk, colafk)
-        await ctx.send(embed=embed, view=view)
+        await ctx.send(view=view)
 
 async def setup(bot):
     await bot.add_cog(AFK(bot))
