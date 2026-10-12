@@ -62,6 +62,8 @@ def expand_reserve_inputs(input_names):
         key = raw.strip().lower()
         if not key:
             continue
+        if key.startswith("normal "):
+            key = key[7:].strip()
 
         if key in GROUP_ALIASES:
             expanded.update(name for name in GROUP_ALIASES[key] if name in VALID_POKEMON)
@@ -511,51 +513,62 @@ class ReserveCommands(commands.Cog):
         entries = []
         errors = []
         mention_pattern = re.compile(r"<@!?(\d+)>")
+        message_contents = []
+        if message.content:
+            message_contents.append(message.content)
+        for snapshot in getattr(message, "message_snapshots", []) or []:
+            snapshot_content = getattr(snapshot, "content", None)
+            if snapshot_content:
+                message_contents.append(snapshot_content)
 
-        for line_number, line in enumerate(message.content.splitlines(), start=1):
-            line = line.strip()
-            if not line:
-                continue
+        line_number = 0
+        for content in message_contents:
+            for line in content.splitlines():
+                line_number += 1
+                line = line.strip()
+                if not line:
+                    continue
 
-            mentions = list(mention_pattern.finditer(line))
-            if len(mentions) != 1:
-                errors.append(f"line {line_number}")
-                continue
-
-            mention = mentions[0]
-            if not line[:mention.start()].strip():
-                source_id = int(mention.group(1))
-                after_mention = line[mention.end():]
-                separator = re.search(r"\s*-\s*", after_mention)
-                if separator is None:
+                mentions = list(mention_pattern.finditer(line))
+                if len(mentions) != 1:
                     errors.append(f"line {line_number}")
                     continue
-                pokemon_text = after_mention[separator.end():].strip()
-            else:
-                source_id = int(mention.group(1))
-                before_mention = line[:mention.start()]
-                separator_index = before_mention.rfind("-")
-                if separator_index < 0:
+
+                mention = mentions[0]
+                if not line[:mention.start()].strip():
+                    source_id = int(mention.group(1))
+                    after_mention = line[mention.end():]
+                    separator = re.search(r"\s*-\s*", after_mention)
+                    if separator is None:
+                        errors.append(f"line {line_number}")
+                        continue
+                    pokemon_text = after_mention[separator.end():].strip()
+                else:
+                    source_id = int(mention.group(1))
+                    before_mention = line[:mention.start()]
+                    separator_index = before_mention.rfind("-")
+                    if separator_index < 0:
+                        errors.append(f"line {line_number}")
+                        continue
+                    pokemon_text = before_mention[:separator_index].strip()
+
+                source = ctx.guild.get_member(source_id)
+                if source is None:
+                    try:
+                        source = await ctx.guild.fetch_member(source_id)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        source = None
+                if source is None:
                     errors.append(f"line {line_number}")
                     continue
-                pokemon_text = before_mention[:separator_index].strip()
 
-            source = ctx.guild.get_member(source_id)
-            if source is None:
-                try:
-                    source = await ctx.guild.fetch_member(source_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    source = None
-            if source is None:
-                errors.append(f"line {line_number}")
-                continue
+                input_names = [name.strip().lower() for name in pokemon_text.split(",") if name.strip()]
+                valid_names, invalid_names = expand_reserve_inputs(input_names)
+                if invalid_names or not valid_names:
+                    errors.append(f"line {line_number}")
+                    continue
 
-            valid_names, invalid_names = expand_reserve_inputs([pokemon_text])
-            if invalid_names or len(valid_names) != 1:
-                errors.append(f"line {line_number}")
-                continue
-
-            entries.append((source, valid_names[0]))
+                entries.extend((source, pokemon_name) for pokemon_name in valid_names)
 
         return entries, errors
 
@@ -640,7 +653,7 @@ class ReserveCommands(commands.Cog):
 
         referenced_message = await self.get_referenced_message(ctx)
         if referenced_message is None:
-            return await ctx.send("❌ Reply to a message containing `@user - pokemon` before using this command.")
+            return await ctx.send("❌ Reply to or forward a message containing `@user - pokemon` before using this command.")
 
         entries, errors = await self.parse_exchange_entries(ctx, referenced_message)
         if errors:

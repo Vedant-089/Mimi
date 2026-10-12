@@ -49,6 +49,8 @@ def expand_collection_inputs(input_names):
         key = raw.strip().lower()
         if not key:
             continue
+        if key.startswith("normal "):
+            key = key[7:].strip()
 
         if key in GROUP_ALIASES:
             expanded.update(name for name in GROUP_ALIASES[key] if name in VALID_POKEMON)
@@ -86,6 +88,8 @@ def expand_global_collection_inputs(input_names):
         key = raw.strip().lower()
         if not key:
             continue
+        if key.startswith("normal "):
+            key = key[7:].strip()
 
         if key in GROUP_ALIASES or key.startswith("all "):
             invalid.append(key)

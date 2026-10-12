@@ -119,6 +119,8 @@ class ShinyHunt(commands.Cog):
             return
 
         key = str(pokemon).lower().strip()
+        if key.startswith("normal "):
+            key = key[7:].strip()
 
         if key in ["none", "reset", "clear", "remove", "null", "nothing"]:
             if global_scope:

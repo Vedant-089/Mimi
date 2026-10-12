@@ -7,7 +7,7 @@ HELP_PAGES_DATA = [
         "title": "✨ Shiny Hunt Commands",
         "description": (
             "• `m!shinyhunt` (`m!sh`) - Sets your shiny hunt for this server.\n"
-            "• `m!sh <pokemon>` - Sets your server-specific shiny hunt target.\n"
+            "• `m!sh <pokemon>` - Sets your server-specific shiny hunt target. Use `normal <pokemon>` for the base Pokémon or `all <pokemon>` for all its forms.\n"
             "• `m!gsh <pokemon>` (`m!globalshinyhunt`) - Sets your shiny hunt globally in every server.\n"
             "• `m!sh` / `m!gsh` - Displays your current server or global hunt.\n"
             "• `m!sh reset` / `none` / `clear` / `remove` - Resets your hunt for this server.\n"
@@ -18,10 +18,10 @@ HELP_PAGES_DATA = [
         "title": "🔒 Reserve Commands",
         "description": (
             "• `m!reserves` (`m!r`) - Main command for managing Pokémon reserves in the server.\n"
-            "• `m!r add <pokemon> @user` (`m!r a`) - Adds Pokémon to a user's reserves (Admins/allowed roles).\n"
-            "• `m!r remove <pokemon> @user` (`m!r r`) - Removes Pokémon from a user's reserves (Admins/allowed roles).\n"
+            "• `m!r add <pokemon> @user` (`m!r a`) - Adds Pokémon to a user's reserves (Admins/allowed roles). Use `normal <pokemon>` for the base Pokémon or `all <pokemon>` for all its forms.\n"
+            "• `m!r remove <pokemon> @user` (`m!r r`) - Removes Pokémon from a user's reserves (Admins/allowed roles). Use `normal <pokemon>` for the base Pokémon or `all <pokemon>` for all its forms.\n"
             "• `m!r remove <pokemon>` (`m!r r`) - Removes Pokémon from every user's reserves (Admins/allowed roles).\n"
-            "• `m!r exchange @user` (`m!r e`) - Exchanges Pokémon from a replied reserve list with that user's reserves (Admins/allowed roles).\n"
+            "• `m!r exchange @user` (`m!r e`) - Exchanges Pokémon from a replied or forwarded reserve list with that user's reserves (Admins/allowed roles).\n"
             "• `m!r exchange @user1 @user2 [pokemon]` (`m!r e`) - Transfers selected or all reserves from user1 to user2.\n"
             "• `m!r clear` (`m!r c`) - Clears reserves for a specified user or all server reserves.\n"
             "• `m!r search <pokemon>` (`m!r s`) - Searches for users who have reserved specific Pokémon.\n"
@@ -34,8 +34,8 @@ HELP_PAGES_DATA = [
         "title": "📦 Collection Commands",
         "description": (
             "• `m!cl` - Main command for managing your server collection pings.\n"
-            "• `m!cl add <pokemon>` - Adds Pokémon to your collection pings.\n"
-            "• `m!cl remove <pokemon>` - Removes Pokémon from your collection pings.\n"
+            "• `m!cl add <pokemon>` - Adds Pokémon to your collection pings. Use `normal <pokemon>` for the base Pokémon or `all <pokemon>` for all its forms.\n"
+            "• `m!cl remove <pokemon>` - Removes Pokémon from your collection pings. Use `normal <pokemon>` for the base Pokémon or `all <pokemon>` for all its forms.\n"
             "• `m!cl clear` - Clears all Pokémon from your collection pings.\n"
             "• `m!cl list` - Displays all Pokémon in your server collection.\n"
             "• `m!gcl add/remove <pokemon>` - Adds or removes exact Pokémon names in every server collection.\n"
