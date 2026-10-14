@@ -467,7 +467,7 @@ import os
 import re
 
 _incense_lock = asyncio.Lock()
-INCENSE_TIMEOUT_SECONDS = 40.0
+INCENSE_TIMEOUT_SECONDS = 30.0
 _incense_data = None
 _incense_write_task = None
 _perk_limit_cache = {}
@@ -678,26 +678,16 @@ async def update_and_check_incense(
         can_be_named = False
 
         if is_active and is_20s and remaining is not None:
-            if remaining > 0:
-                last_times[str(channel_id)] = time.time()
-                should_save = True
+            last_times[str(channel_id)] = time.time()
+            should_save = True
 
-                if channel_id in active_list:
-                    can_be_named = True
-                else:
-                    if len(active_list) < max_limit:
-                        active_list.append(channel_id)
-                        can_be_named = True
-                    else:
-                        can_be_named = False
-            elif remaining == 0:
-                if channel_id in active_list:
-                    can_be_named = True
-                    active_list.remove(channel_id)
-                    last_times.pop(str(channel_id), None)
-                    should_save = True
-                else:
-                    can_be_named = False
+            if channel_id in active_list:
+                can_be_named = True
+            elif len(active_list) < max_limit:
+                active_list.append(channel_id)
+                can_be_named = True
+            else:
+                can_be_named = False
         else:
             if channel_id in active_list:
                 active_list.remove(channel_id)
@@ -713,4 +703,3 @@ async def update_and_check_incense(
 
 def get_incense_tracking_data():
     return copy.deepcopy(_ensure_incense_loaded())
-
