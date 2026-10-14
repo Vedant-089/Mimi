@@ -367,5 +367,11 @@
   ],
   "marshadow": [
     "zenith marshadow"
+  ],
+  "deerling": [
+    "spring deerling",
+    "summer deerling",
+    "autumn deerling",
+    "winter deerling"
   ]
 }

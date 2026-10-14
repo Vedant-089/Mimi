@@ -28,8 +28,8 @@ class AFKButtonView(discord.ui.LayoutView):
         )
         collection_button.callback = self.toggle_collection
 
-        hunt_status = "✅ **Enabled**" if self.shinyafk else "❌ **Disabled**"
-        collection_status = "✅ **Enabled**" if self.colafk else "❌ **Disabled**"
+        hunt_status = "❌ **Disabled**" if self.shinyafk else "✅ **Enabled**"
+        collection_status = "❌ **Disabled**" if self.colafk else "✅ **Enabled**"
 
         self.add_item(
             discord.ui.Container(
