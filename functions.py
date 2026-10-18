@@ -52,7 +52,18 @@ PING_TABLES_SQL = [
         userid BIGINT PRIMARY KEY,
         pokemon_name TEXT,
         shinyafk BOOLEAN DEFAULT FALSE,
-        colafk BOOLEAN DEFAULT FALSE
+        colafk BOOLEAN DEFAULT FALSE,
+        grind_support BOOLEAN DEFAULT FALSE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS grind_support (
+        id BIGSERIAL PRIMARY KEY,
+        channelid BIGINT NOT NULL,
+        pokemon_name TEXT NOT NULL,
+        userid BIGINT NOT NULL,
+        spawn_order BIGINT NOT NULL,
+        UNIQUE (userid, spawn_order)
     );
     """,
     """
@@ -98,6 +109,9 @@ async def ensure_ping_tables(db_instance):
         "ALTER TABLE shiny_hunt ADD COLUMN IF NOT EXISTS colafk BOOLEAN DEFAULT FALSE;"
     )
     await db_instance.execute(
+        "ALTER TABLE shiny_hunt ADD COLUMN IF NOT EXISTS grind_support BOOLEAN DEFAULT FALSE;"
+    )
+    await db_instance.execute(
         """
         DO $$
         BEGIN
@@ -124,6 +138,9 @@ async def ensure_ping_tables(db_instance):
     )
     await db_instance.execute(
         "CREATE INDEX IF NOT EXISTS reserve_pings_server_pokemon_idx ON reserve_pings (serverid, pokemon_name);"
+    )
+    await db_instance.execute(
+        "CREATE INDEX IF NOT EXISTS grind_support_user_order_idx ON grind_support (userid, spawn_order);"
     )
 
 
@@ -292,6 +309,110 @@ def invalidate_collection_cache():
     global _collection_cache_last_updated
     if _collection_cache_last_updated:
         _collection_cache_last_updated = 0.001
+
+
+async def record_grind_support_spawns(
+    db_instance,
+    channel_id: int,
+    pokemon_name: str,
+    user_ids,
+):
+    """Record this spawn for enabled users who were eligible for its ping."""
+    unique_user_ids = list(dict.fromkeys(user_ids))
+    if not unique_user_ids:
+        return
+
+    enabled_rows = await db_instance.fetch(
+        """
+        SELECT userid
+        FROM shiny_hunt
+        WHERE grind_support = true
+          AND userid = ANY($1::bigint[])
+        """,
+        unique_user_ids,
+    )
+
+    if not enabled_rows:
+        return
+
+    async with db_instance.pool.acquire() as connection:
+        async with connection.transaction():
+            for row in enabled_rows:
+                user_id = row["userid"]
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", user_id)
+                next_order = await connection.fetchval(
+                    """
+                    SELECT COALESCE(MAX(spawn_order), 0) + 1
+                    FROM grind_support
+                    WHERE userid = $1
+                    """,
+                    user_id,
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO grind_support
+                        (channelid, pokemon_name, userid, spawn_order)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    channel_id,
+                    pokemon_name,
+                    user_id,
+                    next_order,
+                )
+
+
+async def advance_grind_support(
+    db_instance,
+    channel_id: int,
+    user_id: int,
+    caught_name: str,
+):
+    """Remove a matching caught spawn and return the user's next queued spawn."""
+    enabled = await db_instance.fetchval(
+        """
+        SELECT COALESCE(grind_support, false)
+        FROM shiny_hunt
+        WHERE userid = $1
+        """,
+        user_id,
+    )
+    if not enabled:
+        return None
+
+    rows = await db_instance.fetch(
+        """
+        SELECT id, channelid, pokemon_name
+        FROM grind_support
+        WHERE channelid = $1 AND userid = $2
+        ORDER BY spawn_order
+        """,
+        channel_id,
+        user_id,
+    )
+    caught_key = resolve_alias(caught_name)
+    matched_id = None
+    for row in rows:
+        if resolve_alias(row["pokemon_name"]) == caught_key:
+            matched_id = row["id"]
+            break
+
+    if matched_id is None:
+        return None
+
+    await db_instance.execute(
+        "DELETE FROM grind_support WHERE id = $1",
+        matched_id,
+    )
+    return await db_instance.fetchrow(
+        """
+        SELECT channelid, pokemon_name
+        FROM grind_support
+        WHERE userid = $1
+        ORDER BY spawn_order
+        LIMIT 1
+        """,
+        user_id,
+    )
 
 
 async def get_users_collecting(pokemon_name: str, guild_id: int, db_instance):

@@ -26,6 +26,7 @@ from functions import (
     get_users_region_ping,
     get_server_naming_enabled,
     get_server_shiny_hunt_priority,
+    record_grind_support_spawns,
     update_and_check_incense,
     parse_incense_footer,
     warm_ping_caches,
@@ -816,6 +817,22 @@ class SpawnPredictor(commands.Cog):
                     gigantamax_role_mentions.append(
                         role.mention
                     )
+
+            grind_ping_users = (
+                reserves
+                if reserves
+                else hunters + (
+                    collectors
+                    if (not shiny_hunt_prio or not hunters)
+                    else []
+                )
+            )
+            await record_grind_support_spawns(
+                db,
+                message.channel.id,
+                display_name,
+                grind_ping_users,
+            )
 
             # ==================================================
             # PREDICTION MESSAGE
