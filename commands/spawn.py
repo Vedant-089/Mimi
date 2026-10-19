@@ -33,6 +33,11 @@ from functions import (
 )
 
 POKETWO_BOT_ID = 716390085896962058
+TYPE_CHANNEL_SYNC_GUILD_IDS = {
+    1322103302888095837,
+    1429413142319988788,
+    1429413395769065614,
+}
 MODEL_PATH = "pokemon_student_int8.onnx"
 IMG_SIZE = 224
 CONF_THRESHOLD = 0.30  # 30%
@@ -758,7 +763,12 @@ class SpawnPredictor(commands.Cog):
                 )
             )
 
-            if types and self.is_type_enabled():
+            if (
+                types
+                and self.is_type_enabled()
+                and message.guild
+                and message.guild.id in TYPE_CHANNEL_SYNC_GUILD_IDS
+            ):
                 asyncio.create_task(
                     self.sync_type_channel_data(
                         message.channel.id,
