@@ -62,7 +62,6 @@ HELP_PAGES_DATA = [
         "title": "⚙️ Utility & AFK Commands",
         "description": (
             "• `m!afk` - Opens the interactive AFK menu to toggle global Shiny Hunt and Collection AFK.\n"
-            "• `m!gs true/false` - Enables or disables global Grind Support tracking for your Pokémon pings.\n"
             "• `m!rank <rare/regional/incense>` - Toggles ping roles (`Rares`, `Regionals`, `Incense`).\n"
             "• `m!incenses` - Displays active tracked incense channels in the server.\n"
             "• `m!event <role_names>` - Replaces your current type and region roles with selected ones.\n"
