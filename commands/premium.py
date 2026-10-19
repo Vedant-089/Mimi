@@ -2,7 +2,11 @@ import discord
 from discord.ext import commands
 import json
 
-from functions import invalidate_perk_cache
+from functions import (
+    CLEARED_PERK_LEVEL,
+    DEFAULT_PERK_LEVEL,
+    invalidate_perk_cache,
+)
 
 
 AUTHORIZED_IDS = {602572754721701900, 657694864179331075, 760720549092917248}
@@ -32,7 +36,12 @@ class Premium(commands.Cog):
                 await ctx.send("❌ Invalid server ID.")
                 return
             try:
-                await self.bot.db.execute("DELETE FROM server_perks WHERE serverid = $1", server_id)
+                await self.bot.db.execute("""
+                    INSERT INTO server_perks (serverid, perk_level)
+                    VALUES ($1, $2)
+                    ON CONFLICT (serverid)
+                    DO UPDATE SET perk_level = EXCLUDED.perk_level
+                """, server_id, CLEARED_PERK_LEVEL)
                 invalidate_perk_cache(server_id)
                 await ctx.send(f"✅ Successfully reset perk for server `{server_id}`.")
             except Exception as e:
@@ -52,7 +61,12 @@ class Premium(commands.Cog):
 
         if perk_name.lower() in ["none", "reset", "clear"]:
             try:
-                await self.bot.db.execute("DELETE FROM server_perks WHERE serverid = $1", server_id)
+                await self.bot.db.execute("""
+                    INSERT INTO server_perks (serverid, perk_level)
+                    VALUES ($1, $2)
+                    ON CONFLICT (serverid)
+                    DO UPDATE SET perk_level = EXCLUDED.perk_level
+                """, server_id, CLEARED_PERK_LEVEL)
                 invalidate_perk_cache(server_id)
                 await ctx.send(f"✅ Successfully reset perk for server `{server_id}`.")
             except Exception as e:
@@ -104,8 +118,8 @@ class Premium(commands.Cog):
                 perk_name = row["perk_level"]
                 incense_limit = self.perks.get(perk_name, 0)
             else:
-                perk_name = "None"
-                incense_limit = 0
+                perk_name = DEFAULT_PERK_LEVEL
+                incense_limit = self.perks.get(DEFAULT_PERK_LEVEL, 0)
 
             guild = self.bot.get_guild(target_id)
             server_name = guild.name if guild else str(target_id)

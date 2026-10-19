@@ -611,6 +611,8 @@ _incense_data = None
 _incense_write_task = None
 _perk_limit_cache = {}
 _perks_config = None
+DEFAULT_PERK_LEVEL = "Bronze"
+CLEARED_PERK_LEVEL = "None"
 
 _INCENSE_ACTIVE_RE = re.compile(r"Incense:\s*Active", re.IGNORECASE)
 _INCENSE_20S_RE = re.compile(r"Spawn Interval:\s*20s", re.IGNORECASE)
@@ -669,9 +671,12 @@ async def get_server_max_incense_limit(server_id: int, db_instance) -> int:
     row = await db_instance.fetchrow(
         "SELECT perk_level FROM server_perks WHERE serverid = $1", server_id
     )
-    limit = 0
-    if row:
-        limit = _load_perks_config().get(row["perk_level"], 0)
+    perk_level = (
+        row["perk_level"]
+        if row
+        else DEFAULT_PERK_LEVEL
+    )
+    limit = _load_perks_config().get(perk_level, 0)
     _perk_limit_cache[server_id] = limit
     return limit
 
