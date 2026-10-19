@@ -50,10 +50,10 @@ if not os.path.exists(MODEL_PATH):
 
 def preprocess_image(img: Image.Image):
     img = img.resize((IMG_SIZE, IMG_SIZE))
-    arr = np.asarray(img, dtype=np.float32)
-    np.multiply(arr, 1.0 / 127.5, out=arr)
-    np.subtract(arr, 1.0, out=arr)
-    return np.ascontiguousarray(arr.transpose(2, 0, 1)[np.newaxis, :])
+    arr = np.array(img).astype(np.float32) / 255.0
+    arr = (arr - 0.5) / 0.5
+    arr = arr.transpose(2, 0, 1)  # HWC -> CHW
+    return arr[np.newaxis, :]  # add batch dim
 
 
 def run_inference(session, tensor_np):
@@ -652,11 +652,7 @@ class SpawnPredictor(commands.Cog):
                 else None
             )
 
-            (
-                is_active_incense,
-                has_incense_interval,
-                remaining,
-            ) = parse_incense_footer(embed_footer)
+            is_active_incense, is_20s, remaining = parse_incense_footer(embed_footer)
 
             incense_allowed = await update_and_check_incense(
                 message.guild.id if message.guild else None,
@@ -667,11 +663,7 @@ class SpawnPredictor(commands.Cog):
 
             # If this is an active incense spawn, enforce incense limit checks.
             # Normal spawns (no active incense footer) are predicted unconditionally.
-            if (
-                is_active_incense
-                and has_incense_interval
-                and remaining is not None
-            ):
+            if is_active_incense and is_20s and remaining is not None:
                 if not incense_allowed:
                     download_task.cancel()
                     return
