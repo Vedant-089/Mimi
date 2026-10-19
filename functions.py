@@ -595,7 +595,10 @@ _perk_limit_cache = {}
 _perks_config = None
 
 _INCENSE_ACTIVE_RE = re.compile(r"Incense:\s*Active", re.IGNORECASE)
-_INCENSE_20S_RE = re.compile(r"Spawn Interval:\s*20s", re.IGNORECASE)
+_INCENSE_INTERVAL_RE = re.compile(
+    r"Spawn Interval:\s*(?:10|20|30)s",
+    re.IGNORECASE,
+)
 _INCENSE_REMAINING_RE = re.compile(r"Spawns Remaining:\s*(\d+)", re.IGNORECASE)
 
 
@@ -661,18 +664,22 @@ async def get_server_max_incense_limit(server_id: int, db_instance) -> int:
 def parse_incense_footer(footer_text: str | None):
     """
     Parses embed footer text for Poketwo incense details.
-    Returns tuple: (is_active: bool, is_20s: bool, remaining_spawns: int | None)
+    Returns tuple: (
+        is_active: bool,
+        has_incense_interval: bool,
+        remaining_spawns: int | None,
+    )
     """
     if not footer_text:
         return False, False, None
 
     is_active = bool(_INCENSE_ACTIVE_RE.search(footer_text))
-    is_20s = bool(_INCENSE_20S_RE.search(footer_text))
+    has_incense_interval = bool(_INCENSE_INTERVAL_RE.search(footer_text))
 
     rem_match = _INCENSE_REMAINING_RE.search(footer_text)
     remaining_spawns = int(rem_match.group(1)) if rem_match else None
 
-    return is_active, is_20s, remaining_spawns
+    return is_active, has_incense_interval, remaining_spawns
 
 
 def _read_incense_file() -> dict:
@@ -794,11 +801,13 @@ async def update_and_check_incense(
         active_list = server_info.setdefault("active_incense", [])
         last_times = server_info.setdefault("last_spawn_times", {})
 
-        is_active, is_20s, remaining = parse_incense_footer(footer_text)
+        is_active, has_incense_interval, remaining = parse_incense_footer(
+            footer_text
+        )
 
         can_be_named = False
 
-        if is_active and is_20s and remaining is not None:
+        if is_active and has_incense_interval and remaining is not None:
             last_times[str(channel_id)] = time.time()
             should_save = True
 
