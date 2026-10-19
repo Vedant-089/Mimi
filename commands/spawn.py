@@ -50,10 +50,10 @@ if not os.path.exists(MODEL_PATH):
 
 def preprocess_image(img: Image.Image):
     img = img.resize((IMG_SIZE, IMG_SIZE))
-    arr = np.array(img).astype(np.float32) / 255.0
-    arr = (arr - 0.5) / 0.5
-    arr = arr.transpose(2, 0, 1)  # HWC -> CHW
-    return arr[np.newaxis, :]  # add batch dim
+    arr = np.asarray(img, dtype=np.float32)
+    np.multiply(arr, 1.0 / 127.5, out=arr)
+    np.subtract(arr, 1.0, out=arr)
+    return np.ascontiguousarray(arr.transpose(2, 0, 1)[np.newaxis, :])
 
 
 def run_inference(session, tensor_np):
