@@ -24,8 +24,7 @@ from functions import (
     get_users_reserved,
     get_users_type_ping,
     get_users_region_ping,
-    get_server_naming_enabled,
-    get_server_shiny_hunt_priority,
+    get_server_spawn_settings,
     record_grind_support_spawns,
     update_and_check_incense,
     parse_incense_footer,
@@ -737,15 +736,22 @@ class SpawnPredictor(commands.Cog):
 
             lookup_start = time.perf_counter()
 
-            hunters, collectors, reserves, type_ping_users, region_ping_users, naming_enabled, shiny_hunt_prio = await asyncio.gather(
+            (
+                hunters,
+                collectors,
+                reserves,
+                type_ping_users,
+                region_ping_users,
+                spawn_settings,
+            ) = await asyncio.gather(
                 get_users_hunting(name, message.guild.id, db),
                 get_users_collecting(name, message.guild.id, db),
                 get_users_reserved(name, message.guild.id, db),
                 get_users_type_ping(name, message.guild.id, db),
                 get_users_region_ping(name, message.guild.id, db),
-                get_server_naming_enabled(message.guild.id, db),
-                get_server_shiny_hunt_priority(message.guild.id, db),
+                get_server_spawn_settings(message.guild.id, db),
             )
+            naming_enabled, shiny_hunt_prio = spawn_settings
 
             types = self.get_pokemon_types(name)
             rares = self.get_rare_flags(name)
@@ -769,11 +775,14 @@ class SpawnPredictor(commands.Cog):
                 and message.guild
                 and message.guild.id in TYPE_CHANNEL_SYNC_GUILD_IDS
             ):
-                asyncio.create_task(
+                type_sync_task = asyncio.create_task(
                     self.sync_type_channel_data(
                         message.channel.id,
-                        types
+                        types,
                     )
+                )
+                type_sync_task.add_done_callback(
+                    self._log_background_task_exception
                 )
 
             rare_role_mentions = []
@@ -837,12 +846,18 @@ class SpawnPredictor(commands.Cog):
                     else []
                 )
             )
-            await record_grind_support_spawns(
-                db,
-                message.channel.id,
-                display_name,
-                grind_ping_users,
-            )
+            if grind_ping_users:
+                grind_task = asyncio.create_task(
+                    record_grind_support_spawns(
+                        db,
+                        message.channel.id,
+                        display_name,
+                        grind_ping_users,
+                    )
+                )
+                grind_task.add_done_callback(
+                    self._log_background_task_exception
+                )
 
             # ==================================================
             # PREDICTION MESSAGE
@@ -956,11 +971,18 @@ class SpawnPredictor(commands.Cog):
                 )
 
             if reply_lines:
+                send_start = time.perf_counter()
                 await message.channel.send("\n".join(reply_lines))
+                send_ms = (time.perf_counter() - send_start) * 1000
+            else:
+                send_ms = 0.0
 
             lookup_ms = (time.perf_counter() - lookup_start) * 1000
             print(
                 f"[spawn] lookup+send={lookup_ms:.1f}ms name={name}"
+            )
+            print(
+                f"[spawn] discord-send={send_ms:.1f}ms name={name}"
             )
 
             self._record_spawn_timing(
@@ -973,6 +995,14 @@ class SpawnPredictor(commands.Cog):
                 "⚠️ Prediction error:",
                 e
             )
+
+    @staticmethod
+    def _log_background_task_exception(task: asyncio.Task):
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            print("⚠️ Background spawn task failed:", error)
 
     def _record_spawn_timing(self, inference_ms: float, response_ms: float):
         for key, value in (

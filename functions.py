@@ -159,6 +159,24 @@ async def get_server_shiny_hunt_priority(server_id: int, db_instance) -> bool:
     )
     return bool(value) if value is not None else False
 
+
+async def get_server_spawn_settings(
+    server_id: int,
+    db_instance,
+) -> tuple[bool, bool]:
+    row = await db_instance.fetchrow(
+        """
+        SELECT naming, shiny_hunt_prio
+        FROM server_settings
+        WHERE serverid = $1
+        """,
+        server_id,
+    )
+    if row is None:
+        return True, False
+    return bool(row["naming"]), bool(row["shiny_hunt_prio"])
+
+
 # Load forms.json and prepare mapping
 with open("forms.json", "r") as f:
     _forms_mapping = json.load(f)
