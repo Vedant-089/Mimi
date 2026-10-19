@@ -816,7 +816,7 @@ async def update_and_check_incense(
 
         can_be_named = False
 
-        if is_active and is_20s and remaining is not None:
+        if is_active and remaining is not None:
             last_times[str(channel_id)] = time.time()
             should_save = True
 

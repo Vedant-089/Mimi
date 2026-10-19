@@ -656,7 +656,15 @@ class SpawnPredictor(commands.Cog):
                 else None
             )
 
-            is_active_incense, is_20s, remaining = parse_incense_footer(embed_footer)
+            is_active_incense, _is_20s, remaining = parse_incense_footer(
+                embed_footer
+            )
+
+            # A normal spawn is the only spawn embed without a footer.
+            # Any footer must describe an active incense spawn.
+            if embed_footer and not is_active_incense:
+                download_task.cancel()
+                return
 
             incense_allowed = await update_and_check_incense(
                 message.guild.id if message.guild else None,
@@ -667,7 +675,7 @@ class SpawnPredictor(commands.Cog):
 
             # If this is an active incense spawn, enforce incense limit checks.
             # Normal spawns (no active incense footer) are predicted unconditionally.
-            if is_active_incense and is_20s and remaining is not None:
+            if is_active_incense and remaining is not None:
                 if not incense_allowed:
                     download_task.cancel()
                     return
