@@ -2,7 +2,7 @@ import json
 import discord
 from discord.ext import commands
 from database import db
-from functions import invalidate_tp_qp_cache
+from functions import refresh_tp_qp_cache
 
 # Load type and region JSON mappings
 with open("typing.json", "r", encoding="utf-8") as f:
@@ -117,7 +117,7 @@ class TypePingView(discord.ui.View):
             DO UPDATE SET type_pings = EXCLUDED.type_pings;
         """
         await db.execute(query, self.server_id, self.author_id, payload)
-        invalidate_tp_qp_cache()
+        await refresh_tp_qp_cache(db)
 
     async def update_type_settings(self, interaction: discord.Interaction, new_types: list | set):
         self.active_types = set(new_types)
@@ -215,7 +215,7 @@ class RegionPingView(discord.ui.View):
             DO UPDATE SET region_pings = EXCLUDED.region_pings;
         """
         await db.execute(query, self.server_id, self.author_id, payload)
-        invalidate_tp_qp_cache()
+        await refresh_tp_qp_cache(db)
 
     async def update_region_settings(self, interaction: discord.Interaction, new_regions: list | set):
         self.active_regions = set(new_regions)

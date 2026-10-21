@@ -4,30 +4,25 @@ import json
 from collections import defaultdict
 
 # Global caches and locks
-_hunt_cache = defaultdict(list)
 _server_hunt_cache = defaultdict(lambda: defaultdict(list))
 _cache_last_updated = 0
-_cache_refresh_interval = 15  # seconds
 _cache_lock = asyncio.Lock()
 
 # guild_id -> pokemon_name -> [userids]
 _collection_cache = defaultdict(lambda: defaultdict(list))
 _collection_afk = set()  # userids with global collection AFK on
 _collection_cache_last_updated = 0
-_collection_cache_refresh_interval = 15  # seconds
 _collection_cache_lock = asyncio.Lock()
 
 # guild_id -> pokemon_name -> [userids]
 _reserve_cache = defaultdict(lambda: defaultdict(list))
 _reserve_cache_last_updated = 0
-_reserve_cache_refresh_interval = 15  # seconds
 _reserve_cache_lock = asyncio.Lock()
 
 # guild_id -> pokemon_name -> [userids]
 _type_ping_cache = defaultdict(lambda: defaultdict(list))
 _region_ping_cache = defaultdict(lambda: defaultdict(list))
 _tp_qp_cache_last_updated = 0
-_tp_qp_cache_refresh_interval = 15  # seconds
 _tp_qp_cache_lock = asyncio.Lock()
 
 PING_TABLES_SQL = [
@@ -220,8 +215,8 @@ def resolve_alias(name: str) -> str:
 # Hunt Cache Functions
 # ------------------------
 
-async def refresh_hunt_cache(db_instance):
-    global _hunt_cache, _server_hunt_cache, _cache_last_updated
+async def refresh_hunt_cache(db_instance, server_ids=None):
+    global _server_hunt_cache, _cache_last_updated
     async with _cache_lock:
         try:
             global_rows = await db_instance.fetch("""
@@ -237,17 +232,24 @@ async def refresh_hunt_cache(db_instance):
                 WHERE COALESCE(user_settings.shinyafk, false) = false
                   AND server_hunt.pokemon_name IS NOT NULL
             """)
-            temp_cache = defaultdict(list)
             temp_server_cache = defaultdict(lambda: defaultdict(list))
+            if server_ids is None:
+                server_ids = {
+                    row["serverid"]
+                    for row in server_rows
+                    if row["serverid"] is not None
+                }
+            else:
+                server_ids = set(server_ids)
             for row in global_rows:
                 name = row["name"]
                 if name:
-                    temp_cache[name.lower()].append(row["userid"])
+                    for server_id in server_ids:
+                        temp_server_cache[server_id][name.lower()].append(row["userid"])
             for row in server_rows:
                 name = row["name"]
                 if name:
                     temp_server_cache[row["serverid"]][name.lower()].append(row["userid"])
-            _hunt_cache = temp_cache
             _server_hunt_cache = temp_server_cache
             _cache_last_updated = time.time()
         except Exception as e:
@@ -280,18 +282,12 @@ async def get_users_hunting(pokemon_name: str, guild_id=None, db_instance=None):
         db_instance = guild_id
         guild_id = None
 
-    now = time.time()
     if _cache_last_updated == 0:
         await refresh_hunt_cache(db_instance)
-    elif now - _cache_last_updated > _cache_refresh_interval:
-        if not _cache_lock.locked():
-            asyncio.create_task(refresh_hunt_cache(db_instance))
 
-    user_ids = _get_hunt_user_ids(_hunt_cache, pokemon_name)
-    if guild_id is not None:
-        user_ids.update(_get_hunt_user_ids(_server_hunt_cache.get(guild_id, {}), pokemon_name))
-
-    return list(user_ids)
+    if guild_id is None:
+        return []
+    return list(_get_hunt_user_ids(_server_hunt_cache.get(guild_id, {}), pokemon_name))
 
 
 # ------------------------
@@ -437,12 +433,8 @@ async def get_users_collecting(pokemon_name: str, guild_id: int, db_instance):
     if not guild_id:
         return []
 
-    now = time.time()
     if _collection_cache_last_updated == 0:
         await refresh_collection_cache(db_instance)
-    elif now - _collection_cache_last_updated > _collection_cache_refresh_interval:
-        if not _collection_cache_lock.locked():
-            asyncio.create_task(refresh_collection_cache(db_instance))
 
     name = pokemon_name.lower()
     guild_cache = _collection_cache.get(guild_id, {})
@@ -487,12 +479,8 @@ async def get_users_reserved(pokemon_name: str, guild_id: int, db_instance):
     if not guild_id:
         return []
 
-    now = time.time()
     if _reserve_cache_last_updated == 0:
         await refresh_reserve_cache(db_instance)
-    elif now - _reserve_cache_last_updated > _reserve_cache_refresh_interval:
-        if not _reserve_cache_lock.locked():
-            asyncio.create_task(refresh_reserve_cache(db_instance))
 
     name = pokemon_name.lower()
     guild_cache = _reserve_cache.get(guild_id, {})
@@ -559,12 +547,8 @@ async def get_users_type_ping(pokemon_name: str, guild_id: int, db_instance):
     if not guild_id:
         return []
 
-    now = time.time()
     if _tp_qp_cache_last_updated == 0:
         await refresh_tp_qp_cache(db_instance)
-    elif now - _tp_qp_cache_last_updated > _tp_qp_cache_refresh_interval:
-        if not _tp_qp_cache_lock.locked():
-            asyncio.create_task(refresh_tp_qp_cache(db_instance))
 
     name = pokemon_name.lower()
     guild_cache = _type_ping_cache.get(guild_id, {})
@@ -575,21 +559,17 @@ async def get_users_region_ping(pokemon_name: str, guild_id: int, db_instance):
     if not guild_id:
         return []
 
-    now = time.time()
     if _tp_qp_cache_last_updated == 0:
         await refresh_tp_qp_cache(db_instance)
-    elif now - _tp_qp_cache_last_updated > _tp_qp_cache_refresh_interval:
-        if not _tp_qp_cache_lock.locked():
-            asyncio.create_task(refresh_tp_qp_cache(db_instance))
 
     name = pokemon_name.lower()
     guild_cache = _region_ping_cache.get(guild_id, {})
     return list(set(guild_cache.get(name, [])))
 
 
-async def warm_ping_caches(db_instance):
+async def warm_ping_caches(db_instance, server_ids=None):
     await asyncio.gather(
-        refresh_hunt_cache(db_instance),
+        refresh_hunt_cache(db_instance, server_ids),
         refresh_collection_cache(db_instance),
         refresh_reserve_cache(db_instance),
         refresh_tp_qp_cache(db_instance),

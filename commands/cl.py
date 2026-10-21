@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from database import db
-from functions import ensure_ping_tables, invalidate_collection_cache, resolve_alias
+from functions import ensure_ping_tables, refresh_collection_cache, resolve_alias
 import json
 
 with open("class.json", "r") as f:
@@ -161,7 +161,7 @@ class CollectionCommands(commands.Cog):
                 """,
                 serverid, ctx.author.id, valid_names
             )
-        invalidate_collection_cache()
+        await refresh_collection_cache(db)
 
         preview = ", ".join(name.title() for name in valid_names[:25])
         if len(valid_names) > 25:
@@ -188,7 +188,7 @@ class CollectionCommands(commands.Cog):
                 """,
                 serverid, ctx.author.id, valid_names
             )
-        invalidate_collection_cache()
+        await refresh_collection_cache(db)
 
         preview = ", ".join(name.title() for name in valid_names[:25])
         if len(valid_names) > 25:
@@ -208,7 +208,7 @@ class CollectionCommands(commands.Cog):
             """,
             ctx.author.id, server_ids
         )
-        invalidate_collection_cache()
+        await refresh_collection_cache(db)
         await ctx.send(f"🧹 Your collection has been cleared in {len(server_ids)} servers.")
 
     @commands.group(name="cl", invoke_without_command=True)
@@ -235,7 +235,7 @@ class CollectionCommands(commands.Cog):
             """,
             serverid, user_id, valid_names
         )
-        invalidate_collection_cache()
+        await refresh_collection_cache(db)
 
         preview = ", ".join(name.title() for name in valid_names[:25])
         if len(valid_names) > 25:
@@ -281,7 +281,7 @@ class CollectionCommands(commands.Cog):
             """,
             serverid, user_id, valid_names
         )
-        invalidate_collection_cache()
+        await refresh_collection_cache(db)
 
         preview = ", ".join(name.title() for name in removed[:25])
         if len(removed) > 25:
@@ -301,7 +301,7 @@ class CollectionCommands(commands.Cog):
             "DELETE FROM collection_pings WHERE userid = $1 AND serverid = $2",
             user_id, serverid
         )
-        invalidate_collection_cache()
+        await refresh_collection_cache(db)
         await ctx.send("🧹 Your collection has been cleared.")
 
     @cl.command(name="list")

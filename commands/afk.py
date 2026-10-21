@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from database import db
-from functions import ensure_ping_tables, invalidate_collection_cache, invalidate_hunt_cache
+from functions import ensure_ping_tables, refresh_collection_cache, refresh_hunt_cache
 
 class AFKButtonView(discord.ui.LayoutView):
     def __init__(self, user_id, shinyafk: bool, colafk: bool):
@@ -61,7 +61,7 @@ class AFKButtonView(discord.ui.LayoutView):
             """,
             self.user_id, new_val
         )
-        invalidate_hunt_cache()
+        await refresh_hunt_cache(db, [guild.id for guild in interaction.client.guilds])
 
         self.shinyafk = new_val
         self._build_layout()
@@ -81,7 +81,7 @@ class AFKButtonView(discord.ui.LayoutView):
             """,
             self.user_id, new_val
         )
-        invalidate_collection_cache()
+        await refresh_collection_cache(db)
 
         self.colafk = new_val
         self._build_layout()

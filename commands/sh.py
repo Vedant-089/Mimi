@@ -5,7 +5,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-from functions import ensure_ping_tables, invalidate_hunt_cache, resolve_alias
+from functions import ensure_ping_tables, refresh_hunt_cache, resolve_alias
 
 with open("forms.json", "r", encoding="utf-8") as f:
     FORMS_BY_BASE = {
@@ -75,7 +75,7 @@ class ShinyHunt(commands.Cog):
             SET pokemon_name = EXCLUDED.pokemon_name;
         """
         status = await self.bot.db.execute(query, server_id, user_id, pokemon)
-        invalidate_hunt_cache()
+        await refresh_hunt_cache(self.bot.db, [guild.id for guild in self.bot.guilds])
         log.info("DB status after setting server hunt for %s in %s → %s: %s", user_id, server_id, pokemon, status)
 
     async def set_global_shiny_hunt(self, user_id: int, pokemon: str):
@@ -86,7 +86,7 @@ class ShinyHunt(commands.Cog):
             SET pokemon_name = EXCLUDED.pokemon_name;
         """
         status = await self.bot.db.execute(query, user_id, pokemon)
-        invalidate_hunt_cache()
+        await refresh_hunt_cache(self.bot.db, [guild.id for guild in self.bot.guilds])
         log.info("DB status after setting global hunt for %s → %s: %s", user_id, pokemon, status)
 
     # ---------------------------------------------------------------------
@@ -139,7 +139,7 @@ class ShinyHunt(commands.Cog):
                 reset_args = (ctx.guild.id, ctx.author.id)
 
             await self.bot.db.execute(reset_query, *reset_args)
-            invalidate_hunt_cache()
+            await refresh_hunt_cache(self.bot.db, [guild.id for guild in self.bot.guilds])
             await ctx.reply("🧹 Your shiny hunt has been **reset**. You're now hunting nothing.")
             return
 

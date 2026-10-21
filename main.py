@@ -25,6 +25,7 @@ async def load_extensions():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
+    await warm_ping_caches(bot.db, [guild.id for guild in bot.guilds])
 
 @bot.event
 async def on_message(message):

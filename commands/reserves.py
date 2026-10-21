@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands
 
 from database import db
-from functions import ensure_ping_tables, invalidate_reserve_cache, resolve_alias
+from functions import ensure_ping_tables, refresh_reserve_cache, resolve_alias
 
 with open("class.json", "r", encoding="utf-8") as f:
     VALID_POKEMON = set(name.lower().strip() for name in json.load(f).keys())
@@ -328,7 +328,7 @@ class ReserveCommands(commands.Cog):
             "DELETE FROM reserve_pings WHERE serverid = $1",
             serverid
         )
-        invalidate_reserve_cache()
+        await refresh_reserve_cache(db)
         await interaction.followup.send("🧹 Cleared all reserves.")
 
     async def clear_reserves_for_member(self, ctx: commands.Context, member: discord.Member):
@@ -344,7 +344,7 @@ class ReserveCommands(commands.Cog):
             "DELETE FROM reserve_pings WHERE userid = $1 AND serverid = $2",
             member.id, serverid
         )
-        invalidate_reserve_cache()
+        await refresh_reserve_cache(db)
         await ctx.send(f"🧹 Cleared {member.mention}'s reserves.")
 
     async def remove_reserves_for_all(self, ctx: commands.Context, valid_names: list[str], invalid_names: list[str]):
@@ -371,7 +371,7 @@ class ReserveCommands(commands.Cog):
             """,
             ctx.guild.id, valid_names
         )
-        invalidate_reserve_cache()
+        await refresh_reserve_cache(db)
 
         preview = ", ".join(name.title() for name in removed[:25])
         if len(removed) > 25:
@@ -425,7 +425,7 @@ class ReserveCommands(commands.Cog):
             """,
             serverid, user_id, valid_names
         )
-        invalidate_reserve_cache()
+        await refresh_reserve_cache(db)
 
         preview = ", ".join(name.title() for name in valid_names[:25])
         if len(valid_names) > 25:
@@ -487,7 +487,7 @@ class ReserveCommands(commands.Cog):
             """,
             serverid, user_id, valid_names
         )
-        invalidate_reserve_cache()
+        await refresh_reserve_cache(db)
 
         preview = ", ".join(name.title() for name in removed[:25])
         if len(removed) > 25:
@@ -618,7 +618,7 @@ class ReserveCommands(commands.Cog):
             """,
             ctx.guild.id, source.id, target.id, pokemon_names
         )
-        invalidate_reserve_cache()
+        await refresh_reserve_cache(db)
 
         preview = ", ".join(name.title() for name in pokemon_names[:25])
         if len(pokemon_names) > 25:
@@ -700,7 +700,7 @@ class ReserveCommands(commands.Cog):
             """,
             ctx.guild.id, target_id, source_ids, pokemon_names
         )
-        invalidate_reserve_cache()
+        await refresh_reserve_cache(db)
 
         exchanged = ", ".join(name.title() for name in pokemon_names)
         await ctx.send(f"🔄 Exchanged {exchanged} from {target.mention} to the users in the replied message.")

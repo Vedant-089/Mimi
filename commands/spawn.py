@@ -279,7 +279,7 @@ class SpawnPredictor(commands.Cog):
     async def ensure_db_connected(self):
         if not db.pool:
             await db.connect()
-        await warm_ping_caches(db)
+        await warm_ping_caches(db, [guild.id for guild in self.bot.guilds])
 
     async def cog_unload(self):
         await self.http_session.close()
