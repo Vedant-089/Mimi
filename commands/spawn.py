@@ -974,8 +974,13 @@ class SpawnPredictor(commands.Cog):
                     )
 
             if naming_enabled:
+                copy_name = (
+                    "nidoran"
+                    if name.casefold() in {"nidoranm", "nidoranf"}
+                    else name
+                )
                 reply_lines.append(
-                    f"Copy-Command: `@Pokétwo#8236 c {name}`"
+                    f"Copy-Command: `@Pokétwo#8236 c {copy_name}`"
                 )
 
             if reply_lines:

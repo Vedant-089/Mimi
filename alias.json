@@ -4635,6 +4635,20 @@
     "Kleptifux",
     "Goupilou"
   ],
+  "nidoranm": [
+    "ニドラン♂",
+    "Nidoran♂",
+    "Nidoran M",
+    "ニトラン♂",
+    "Nidoran-M"
+  ],
+  "nidoranf": [
+    "ニドラン♀",
+    "Nidoran♀",
+    "Nidoran F",
+    "ニトラン♀",
+    "Nidoran-F"
+  ],
   "nidoking": [
     "ニドキング",
     "Nidokingu",
@@ -9103,12 +9117,6 @@
   ],
   "mr. rime": [
     "mr. rime"
-  ],
-  "nidoranf": [
-    "nidoranf"
-  ],
-  "nidoranm": [
-    "nidoranm"
   ],
   "noice face eiscue": [
     "noice face eiscue"
