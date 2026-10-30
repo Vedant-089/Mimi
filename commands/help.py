@@ -28,6 +28,7 @@ HELP_PAGES_DATA = [
             "• `m!r list` (`m!r l`) - Lists all active Pokémon reserves in the server.\n"
             "• `m!r @user` - Displays all reserved Pokémon for a specific user.\n"
             "• `m!allow <roleid1>, <roleid2>` - Admin-only; allows roles to use restricted reserve commands."
+            "\n• `m!suspend @user` - Suspends a user and removes their Mimi data (Admins/allowed roles)."
         ),
     },
     {

@@ -1,7 +1,55 @@
 import time
 import asyncio
 import json
+import discord
 from collections import defaultdict
+
+ALLOWED_ROLES_FILE = "allowed_roles.json"
+SUSPENDED_USERS_FILE = "suspended.json"
+
+
+def load_suspended_users() -> set[str]:
+    try:
+        with open(SUSPENDED_USERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+    if isinstance(data, dict):
+        data = data.get("users", [])
+    if not isinstance(data, list):
+        return set()
+    return {username.casefold() for username in data if isinstance(username, str)}
+
+
+def is_suspended(user) -> bool:
+    username = getattr(user, "name", "")
+    return isinstance(username, str) and username.casefold() in load_suspended_users()
+
+
+def has_allowed_support_role(member: discord.Member) -> bool:
+    if member.guild_permissions.administrator:
+        return True
+    try:
+        with open(ALLOWED_ROLES_FILE, "r", encoding="utf-8") as f:
+            allowed_roles = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        allowed_roles = {}
+    allowed_role_ids = {int(role_id) for role_id in allowed_roles.get(str(member.guild.id), [])}
+    return any(role.id in allowed_role_ids for role in member.roles)
+
+
+async def wipe_user_data(db_instance, user_id: int):
+    for table in (
+        "collection_pings",
+        "reserve_pings",
+        "shiny_hunt",
+        "grind_support",
+        "server_shiny_hunt",
+        "tp_qp",
+    ):
+        await db_instance.execute(f"DELETE FROM {table} WHERE userid = $1", user_id)
+
 
 # Global caches and locks
 _server_hunt_cache = defaultdict(lambda: defaultdict(list))

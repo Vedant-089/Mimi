@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from database import db
-from functions import ensure_ping_tables, refresh_collection_cache, refresh_hunt_cache
+from functions import ensure_ping_tables, is_suspended, refresh_collection_cache, refresh_hunt_cache
 
 class AFKButtonView(discord.ui.LayoutView):
     def __init__(self, user_id, shinyafk: bool, colafk: bool):
@@ -50,6 +50,11 @@ class AFKButtonView(discord.ui.LayoutView):
     async def toggle_hunt(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Only you can use these buttons.", ephemeral=True)
+        if is_suspended(interaction.user):
+            return await interaction.response.send_message(
+                "❌ You are suspended from using Mimi and cannot add pings.",
+                ephemeral=True,
+            )
 
         current = await db.fetchval("SELECT shinyafk FROM shiny_hunt WHERE userid = $1", self.user_id)
         new_val = not bool(current)
@@ -70,6 +75,11 @@ class AFKButtonView(discord.ui.LayoutView):
     async def toggle_collection(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Only you can use these buttons.", ephemeral=True)
+        if is_suspended(interaction.user):
+            return await interaction.response.send_message(
+                "❌ You are suspended from using Mimi and cannot add pings.",
+                ephemeral=True,
+            )
 
         current = await db.fetchval("SELECT colafk FROM shiny_hunt WHERE userid = $1", self.user_id)
         new_val = not bool(current)
@@ -97,6 +107,8 @@ class AFK(commands.Cog):
 
     @commands.command(name="afk")
     async def afk(self, ctx):
+        if is_suspended(ctx.author):
+            return await ctx.send("❌ You are suspended from using Mimi and cannot add pings.")
         user_id = ctx.author.id
 
         await db.execute("""

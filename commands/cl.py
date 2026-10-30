@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from database import db
-from functions import ensure_ping_tables, refresh_collection_cache, resolve_alias
+from functions import ensure_ping_tables, is_suspended, refresh_collection_cache, resolve_alias
 import json
 
 with open("class.json", "r") as f:
@@ -145,6 +145,8 @@ class CollectionCommands(commands.Cog):
 
     @global_collection.command(name="add")
     async def global_add(self, ctx, *, names: str):
+        if is_suspended(ctx.author):
+            return await ctx.send("❌ You are suspended from using Mimi and cannot add pings.")
         input_names = [name.strip().lower() for name in names.split(",") if name.strip()]
         valid_names, invalid = expand_global_collection_inputs(input_names)
 
@@ -219,6 +221,8 @@ class CollectionCommands(commands.Cog):
     @cl.command(name="add")
     @commands.guild_only()
     async def add(self, ctx, *, names: str):
+        if is_suspended(ctx.author):
+            return await ctx.send("❌ You are suspended from using Mimi and cannot add pings.")
         user_id = ctx.author.id
         serverid = ctx.guild.id
         input_names = [n.strip().lower() for n in names.split(",")]

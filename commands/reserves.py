@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands
 
 from database import db
-from functions import ensure_ping_tables, refresh_reserve_cache, resolve_alias
+from functions import ensure_ping_tables, is_suspended, refresh_reserve_cache, resolve_alias
 
 with open("class.json", "r", encoding="utf-8") as f:
     VALID_POKEMON = set(name.lower().strip() for name in json.load(f).keys())
@@ -406,6 +406,8 @@ class ReserveCommands(commands.Cog):
         member, pokemon = await self.parse_member_and_pokemon(ctx, args)
         if member is None:
             return await ctx.send("❌ Mention a user: `m!r a @user <pokemon>` or `m!r a <pokemon> @user`.")
+        if is_suspended(member):
+            return await ctx.send("❌ You cannot add reserves for a user who is suspended from Mimi.")
         if not pokemon:
             return await ctx.send("❌ Provide at least one Pokémon name.")
 
@@ -575,6 +577,8 @@ class ReserveCommands(commands.Cog):
     async def transfer_reserves(self, ctx: commands.Context, source: discord.Member, target: discord.Member, pokemon_names=None):
         if source.id == target.id:
             return await ctx.send("❌ The source and receiving users must be different.")
+        if is_suspended(target):
+            return await ctx.send("❌ You cannot add reserves for a user who is suspended from Mimi.")
 
         if pokemon_names is None:
             rows = await db.fetch(

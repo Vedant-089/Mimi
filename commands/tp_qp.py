@@ -2,7 +2,7 @@ import json
 import discord
 from discord.ext import commands
 from database import db
-from functions import refresh_tp_qp_cache
+from functions import is_suspended, refresh_tp_qp_cache
 
 # Load type and region JSON mappings
 with open("typing.json", "r", encoding="utf-8") as f:
@@ -120,6 +120,11 @@ class TypePingView(discord.ui.View):
         await refresh_tp_qp_cache(db)
 
     async def update_type_settings(self, interaction: discord.Interaction, new_types: list | set):
+        if is_suspended(interaction.user):
+            return await interaction.response.send_message(
+                "❌ You are suspended from using Mimi and cannot add pings.",
+                ephemeral=True,
+            )
         self.active_types = set(new_types)
         await self.save_to_db()
         self.update_select_defaults()
@@ -218,6 +223,11 @@ class RegionPingView(discord.ui.View):
         await refresh_tp_qp_cache(db)
 
     async def update_region_settings(self, interaction: discord.Interaction, new_regions: list | set):
+        if is_suspended(interaction.user):
+            return await interaction.response.send_message(
+                "❌ You are suspended from using Mimi and cannot add pings.",
+                ephemeral=True,
+            )
         self.active_regions = set(new_regions)
         await self.save_to_db()
         self.update_select_defaults()

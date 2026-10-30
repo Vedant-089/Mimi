@@ -4,7 +4,7 @@ import discord
 from discord.ext import commands
 
 from database import db
-from functions import advance_grind_support, ensure_ping_tables
+from functions import advance_grind_support, ensure_ping_tables, is_suspended
 
 
 POKETWO_BOT_ID = 716390085896962058
@@ -24,6 +24,8 @@ class GrindSupport(commands.Cog):
 
     @commands.command(name="gs")
     async def grind_support(self, ctx, setting: str = None):
+        if setting is not None and is_suspended(ctx.author):
+            return await ctx.send("❌ You are suspended from using Mimi and cannot add pings.")
         if setting is None or setting.lower() not in {"true", "false"}:
             current = await db.fetchval(
                 """

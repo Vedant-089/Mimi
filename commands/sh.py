@@ -5,7 +5,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-from functions import ensure_ping_tables, refresh_hunt_cache, resolve_alias
+from functions import ensure_ping_tables, is_suspended, refresh_hunt_cache, resolve_alias
 
 with open("forms.json", "r", encoding="utf-8") as f:
     FORMS_BY_BASE = {
@@ -95,6 +95,9 @@ class ShinyHunt(commands.Cog):
 
     async def handle_shiny_hunt(self, ctx: commands.Context, pokemon: str | None, global_scope: bool):
         log.debug("Command invoked by %s (%s) with arg: %s", ctx.author, ctx.author.id, pokemon)
+        if pokemon is not None and is_suspended(ctx.author):
+            await ctx.reply("❌ You are suspended from using Mimi and cannot add pings.")
+            return
 
         if global_scope:
             current_query = "SELECT pokemon_name FROM shiny_hunt WHERE userid = $1;"

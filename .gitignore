@@ -9,3 +9,4 @@ venv/
 .venv/
 type_channels.json
 allowed_roles.json
+suspended.json
