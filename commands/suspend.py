@@ -40,7 +40,7 @@ class SuspendCommands(commands.Cog):
             return
 
         suspended_users = load_suspended_users()
-        suspended_users.add(member.name.casefold())
+        suspended_users.add(str(member.id))
         with open(SUSPENDED_USERS_FILE, "w", encoding="utf-8") as file:
             json.dump(sorted(suspended_users), file, indent=2)
 

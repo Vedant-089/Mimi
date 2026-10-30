@@ -23,8 +23,14 @@ def load_suspended_users() -> set[str]:
 
 
 def is_suspended(user) -> bool:
+    suspended_users = load_suspended_users()
+    user_id = getattr(user, "id", None)
     username = getattr(user, "name", "")
-    return isinstance(username, str) and username.casefold() in load_suspended_users()
+    return (
+        user_id is not None and str(user_id) in suspended_users
+    ) or (
+        isinstance(username, str) and username.casefold() in suspended_users
+    )
 
 
 def has_allowed_support_role(member: discord.Member) -> bool:
