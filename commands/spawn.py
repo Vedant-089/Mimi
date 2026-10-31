@@ -25,6 +25,7 @@ from functions import (
     get_users_type_ping,
     get_users_region_ping,
     get_server_spawn_settings,
+    is_only_ping_enabled,
     record_grind_support_spawns,
     update_and_check_incense,
     parse_incense_footer,
@@ -760,6 +761,15 @@ class SpawnPredictor(commands.Cog):
                 get_server_spawn_settings(message.guild.id, db),
             )
             naming_enabled, shiny_hunt_prio = spawn_settings
+
+            if is_only_ping_enabled() and not (
+                hunters
+                or collectors
+                or reserves
+                or type_ping_users
+                or region_ping_users
+            ):
+                return
 
             types = self.get_pokemon_types(name)
             rares = self.get_rare_flags(name)

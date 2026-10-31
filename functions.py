@@ -6,6 +6,28 @@ from collections import defaultdict
 
 ALLOWED_ROLES_FILE = "allowed_roles.json"
 SUSPENDED_USERS_FILE = "suspended.json"
+ONLY_PING_FILE = "only_ping.json"
+
+
+def is_only_ping_enabled() -> bool:
+    try:
+        with open(ONLY_PING_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return False
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"⚠️ Failed to read {ONLY_PING_FILE}: {error}")
+        return False
+
+    if isinstance(data, bool):
+        return data
+    return isinstance(data, dict) and data.get("only_ping") is True
+
+
+def set_only_ping_enabled(enabled: bool) -> None:
+    with open(ONLY_PING_FILE, "w", encoding="utf-8") as f:
+        json.dump({"only_ping": enabled}, f, indent=2)
+        f.write("\n")
 
 
 def load_suspended_users() -> set[str]:

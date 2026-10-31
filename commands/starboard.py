@@ -7,9 +7,11 @@ import discord
 from discord.ext import commands
 
 from database import db
+from functions import set_only_ping_enabled
 
 
 POKETWO_BOT_ID = 716390085896962058
+OWNER_ID = 760720549092917248
 TYPE_SETTINGS_PATH = Path("type_settings.json")
 TYPE_CHANNELS_PATH = Path("type_channels.json")
 CATCH_RE = re.compile(
@@ -42,6 +44,26 @@ class Starboard(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.type_channels_lock = asyncio.Lock()
+
+    @commands.command(name="op")
+    async def only_ping(self, ctx: commands.Context, value: str = ""):
+        if ctx.author.id != OWNER_ID:
+            return
+
+        value = value.strip().casefold()
+        if value not in {"true", "false"}:
+            await ctx.send("Usage: `p!op true` or `p!op false`")
+            return
+
+        try:
+            set_only_ping_enabled(value == "true")
+        except OSError as error:
+            print(f"⚠️ Failed to write {Path('only_ping.json')}: {error}")
+            await ctx.send("❌ Failed to update the only-ping setting.")
+            return
+
+        state = "enabled" if value == "true" else "disabled"
+        await ctx.send(f"✅ Only-ping naming is now **{state}**.")
 
     def is_type_enabled(self) -> bool:
         try:
