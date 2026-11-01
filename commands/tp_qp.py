@@ -14,9 +14,6 @@ with open("region.json", "r", encoding="utf-8") as f:
 
 ALL_TYPES = [t for t in TYPING_DATA.keys() if t != "???"]
 ALL_REGIONS = [r for r in REGION_DATA.keys() if r != "???"]
-POKETWO_BOT_ID = 716390085896962058
-
-
 def get_pokemons_for_types(selected_types):
     pokes = set()
     for t in selected_types:
@@ -330,23 +327,14 @@ class TypeRegionPings(commands.Cog):
         if reference is None or reference.message_id is None:
             return await ctx.send("❌ Reply to a Pokétwo embed.")
 
-        replied_message = reference.resolved
-        if not isinstance(replied_message, discord.Message):
-            try:
-                replied_message = await ctx.channel.fetch_message(reference.message_id)
-            except discord.HTTPException:
-                return await ctx.send("❌ I could not read the replied-to message.")
-
-        author_name = replied_message.author.name.casefold().replace("é", "e")
-        if (
-            replied_message.author.id != POKETWO_BOT_ID
-            and author_name != "poketwo"
-        ):
-            return await ctx.send("❌ Reply to a Pokétwo embed.")
+        try:
+            replied_message = await ctx.channel.fetch_message(reference.message_id)
+        except discord.HTTPException:
+            return await ctx.send("❌ I could not read the replied-to message.")
 
         quests_embed = next(iter(replied_message.embeds), None)
         if quests_embed is None:
-            return await ctx.send("❌ Reply to a Pokétwo embed.")
+            return await ctx.send("❌ The replied message does not contain an embed.")
 
         new_types, new_regions = parse_quest_pings(quests_embed)
         if not new_types and not new_regions:
