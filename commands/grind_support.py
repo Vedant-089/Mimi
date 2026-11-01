@@ -142,8 +142,15 @@ class GrindSupport(commands.Cog):
             return
 
         if next_spawn:
+            jump_url = (
+                f"https://discord.com/channels/"
+                f"{next_spawn['guildid']}/{next_spawn['channelid']}/"
+                f"{next_spawn['messageid']}"
+                if next_spawn["guildid"] and next_spawn["messageid"]
+                else f"<#{next_spawn['channelid']}>"
+            )
             await message.channel.send(
-                f"<#{next_spawn['channelid']}> - {next_spawn['pokemon_name']}"
+                f"{jump_url} - {next_spawn['pokemon_name']}"
             )
 
 

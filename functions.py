@@ -163,7 +163,9 @@ PING_TABLES_SQL = [
     """
     CREATE TABLE IF NOT EXISTS grind_support (
         id BIGSERIAL PRIMARY KEY,
+        guildid BIGINT,
         channelid BIGINT NOT NULL,
+        messageid BIGINT,
         pokemon_name TEXT NOT NULL,
         userid BIGINT NOT NULL,
         spawn_order BIGINT NOT NULL,
@@ -214,6 +216,12 @@ async def ensure_ping_tables(db_instance):
     )
     await db_instance.execute(
         "ALTER TABLE shiny_hunt ADD COLUMN IF NOT EXISTS grind_support BOOLEAN DEFAULT FALSE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE grind_support ADD COLUMN IF NOT EXISTS guildid BIGINT;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE grind_support ADD COLUMN IF NOT EXISTS messageid BIGINT;"
     )
     await db_instance.execute(
         """
@@ -448,7 +456,8 @@ async def refresh_grind_support_cache(db_instance):
             )
             queue_rows = await db_instance.fetch(
                 """
-                SELECT id, channelid, pokemon_name, userid, spawn_order
+                SELECT id, guildid, channelid, messageid, pokemon_name,
+                       userid, spawn_order
                 FROM grind_support
                 ORDER BY userid, spawn_order
                 """
@@ -457,7 +466,9 @@ async def refresh_grind_support_cache(db_instance):
             for row in queue_rows:
                 temp_cache[row["userid"]].append({
                     "id": row["id"],
+                    "guildid": row["guildid"],
                     "channelid": row["channelid"],
+                    "messageid": row["messageid"],
                     "pokemon_name": row["pokemon_name"],
                     "spawn_order": row["spawn_order"],
                 })
@@ -489,6 +500,7 @@ async def record_grind_support_spawns(
     db_instance,
     guild_id: int,
     channel_id: int,
+    message_id: int,
     pokemon_name: str,
     user_ids,
 ):
@@ -525,18 +537,23 @@ async def record_grind_support_spawns(
                     row = await connection.fetchrow(
                         """
                         INSERT INTO grind_support
-                            (channelid, pokemon_name, userid, spawn_order)
-                        VALUES ($1, $2, $3, $4)
+                            (guildid, channelid, messageid, pokemon_name,
+                             userid, spawn_order)
+                        VALUES ($1, $2, $3, $4, $5, $6)
                         RETURNING id
                         """,
+                        guild_id,
                         channel_id,
+                        message_id,
                         pokemon_name,
                         user_id,
                         next_order,
                     )
                     queued_rows.append((user_id, {
                         "id": row["id"],
+                        "guildid": guild_id,
                         "channelid": channel_id,
+                        "messageid": message_id,
                         "pokemon_name": pokemon_name,
                         "spawn_order": next_order,
                     }))
@@ -568,8 +585,11 @@ async def advance_grind_support(
             (
                 index
                 for index, row in enumerate(user_queue)
-                if row["channelid"] == channel_id
-                and resolve_alias(row["pokemon_name"]) == caught_key
+                if (
+                    row["guildid"] == guild_id
+                    and row["channelid"] == channel_id
+                    and resolve_alias(row["pokemon_name"]) == caught_key
+                )
             ),
             None,
         )

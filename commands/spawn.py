@@ -890,6 +890,7 @@ class SpawnPredictor(commands.Cog):
                         db,
                         message.guild.id,
                         message.channel.id,
+                        message.id,
                         display_name,
                         grind_ping_users,
                     )
