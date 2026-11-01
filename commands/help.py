@@ -48,7 +48,8 @@ HELP_PAGES_DATA = [
         "title": "🎯 Type & Region Ping Commands",
         "description": (
             "• `m!tp` - Opens the interactive Type Pings embed with toggle buttons and dropdown.\n"
-            "• `m!rp` (`m!qp`) - Opens the interactive Region Pings embed with toggle buttons and dropdown."
+            "• `m!rp` (`m!qp`) - Opens the interactive Region Pings embed with toggle buttons and dropdown.\n"
+            "• `m!event` (`m!ev`) - Reply to a Pokétwo Quests embed to add its type and region quests to your pings."
         ),
     },
     {
@@ -66,7 +67,6 @@ HELP_PAGES_DATA = [
             "• `m!afk` - Opens the interactive AFK menu to toggle global Shiny Hunt and Collection AFK.\n"
             "• `m!rank <rare/regional/incense>` - Toggles ping roles (`Rares`, `Regionals`, `Incense`).\n"
             "• `m!incenses` - Displays active tracked incense channels in the server.\n"
-            "• `m!event <role_names>` - Replaces your current type and region roles with selected ones.\n"
             "• `m!roles` - Creates standard type, region, and perk roles (Admin Only).\n"
             "• `m!settings` - Opens the server settings panel."
         ),

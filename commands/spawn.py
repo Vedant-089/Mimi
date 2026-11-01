@@ -26,7 +26,6 @@ from functions import (
     get_users_region_ping,
     get_server_spawn_settings,
     is_only_ping_enabled,
-    record_grind_support_spawns,
     set_poketwo_send_permission,
     update_and_check_incense,
     parse_incense_footer,
@@ -875,30 +874,6 @@ class SpawnPredictor(commands.Cog):
                     gigantamax_role_mentions.append(
                         role.mention
                     )
-
-            grind_ping_users = (
-                reserves
-                if reserves
-                else hunters + (
-                    collectors
-                    if (not shiny_hunt_prio or not hunters)
-                    else []
-                )
-            )
-            if grind_ping_users:
-                grind_task = asyncio.create_task(
-                    record_grind_support_spawns(
-                        db,
-                        message.guild.id,
-                        message.channel.id,
-                        message.id,
-                        display_name,
-                        grind_ping_users,
-                    )
-                )
-                grind_task.add_done_callback(
-                    self._log_background_task_exception
-                )
 
             # ==================================================
             # PREDICTION MESSAGE

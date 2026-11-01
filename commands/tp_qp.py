@@ -1,4 +1,5 @@
 import json
+import re
 import discord
 from discord.ext import commands
 from database import db
@@ -43,6 +44,37 @@ def parse_user_enabled_keys(raw_data, key_name):
     except Exception:
         pass
     return set()
+
+
+def parse_quest_pings(embed: discord.Embed):
+    """Extract type and region names from a Pokétwo quests embed."""
+    if (embed.title or "").strip().casefold() != "quests":
+        return set(), set()
+
+    text_parts = [embed.description or ""]
+    text_parts.extend(
+        f"{field.name}\n{field.value}" for field in embed.fields
+    )
+    text = "\n".join(text_parts).casefold()
+
+    type_pattern = "|".join(
+        re.escape(ping_type) for ping_type in sorted(ALL_TYPES, key=len, reverse=True)
+    )
+    region_pattern = "|".join(
+        re.escape(region) for region in sorted(ALL_REGIONS, key=len, reverse=True)
+    )
+
+    types = set(re.findall(rf"\b({type_pattern})-type\b", text))
+    regions = set(re.findall(rf"\b({region_pattern})\s+region\b", text))
+    return types, regions
+
+
+def build_ping_payload(names, key_name, pokemon_resolver):
+    selected_names = sorted(set(names))
+    return json.dumps({
+        key_name: selected_names,
+        "pokemons": pokemon_resolver(selected_names),
+    })
 
 
 # ==================================================
@@ -286,6 +318,93 @@ class TypeRegionPings(commands.Cog):
         view = RegionPingView(ctx.author.id, ctx.guild.id, active_regions)
         embed = view.build_embed()
         await ctx.send(embed=embed, view=view)
+
+    @commands.command(name="event", aliases=["ev"])
+    @commands.guild_only()
+    async def event_pings_cmd(self, ctx):
+        """Adds type and region pings found in a replied-to Pokétwo quests embed."""
+        if is_suspended(ctx.author):
+            return await ctx.send(
+                "❌ You are suspended from using Mimi and cannot add pings."
+            )
+
+        reference = ctx.message.reference
+        if reference is None or reference.message_id is None:
+            return await ctx.send("❌ Reply to a Pokétwo embed titled **Quests**.")
+
+        replied_message = reference.resolved
+        if not isinstance(replied_message, discord.Message):
+            try:
+                replied_message = await ctx.channel.fetch_message(reference.message_id)
+            except discord.HTTPException:
+                return await ctx.send("❌ I could not read the replied-to message.")
+
+        author_name = replied_message.author.name.casefold().replace("é", "e")
+        if author_name != "poketwo":
+            return await ctx.send("❌ Reply to a Pokétwo embed titled **Quests**.")
+
+        quests_embed = next(
+            (
+                embed for embed in replied_message.embeds
+                if (embed.title or "").strip().casefold() == "quests"
+            ),
+            None,
+        )
+        if quests_embed is None:
+            return await ctx.send("❌ Reply to a Pokétwo embed titled **Quests**.")
+
+        new_types, new_regions = parse_quest_pings(quests_embed)
+        if not new_types and not new_regions:
+            return await ctx.send(
+                "❌ I could not find any type or region quests in that embed."
+            )
+
+        row = await db.fetchrow(
+            """
+            SELECT type_pings, region_pings
+            FROM tp_qp
+            WHERE serverid = $1 AND userid = $2
+            """,
+            ctx.guild.id,
+            ctx.author.id,
+        )
+        active_types = parse_user_enabled_keys(
+            row["type_pings"] if row else None, "types"
+        )
+        active_regions = parse_user_enabled_keys(
+            row["region_pings"] if row else None, "regions"
+        )
+        added_types = sorted(new_types - active_types)
+        added_regions = sorted(new_regions - active_regions)
+        active_types.update(new_types)
+        active_regions.update(new_regions)
+
+        await db.execute(
+            """
+            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (serverid, userid)
+            DO UPDATE SET
+                type_pings = EXCLUDED.type_pings,
+                region_pings = EXCLUDED.region_pings;
+            """,
+            ctx.guild.id,
+            ctx.author.id,
+            build_ping_payload(active_types, "types", get_pokemons_for_types),
+            build_ping_payload(active_regions, "regions", get_pokemons_for_regions),
+        )
+        await refresh_tp_qp_cache(db)
+
+        added = []
+        if added_types:
+            added.append(f"types: {', '.join(name.capitalize() for name in added_types)}")
+        if added_regions:
+            added.append(
+                f"regions: {', '.join(name.capitalize() for name in added_regions)}"
+            )
+        if not added:
+            return await ctx.send("✅ All quests in that embed are already in your pings.")
+        await ctx.send(f"✅ Added event pings — {'; '.join(added)}.")
 
 
 async def setup(bot):
