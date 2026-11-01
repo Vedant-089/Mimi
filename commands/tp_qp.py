@@ -48,16 +48,8 @@ def parse_user_enabled_keys(raw_data, key_name):
 
 
 def parse_quest_pings(embed: discord.Embed):
-    """Extract type and region names from a Pokétwo quests embed."""
-    heading_names = {
-        (embed.title or "").strip().casefold(),
-        (embed.author.name or "").strip().casefold(),
-    }
-    if "quests" not in heading_names:
-        return set(), set()
-
+    """Extract type and region names from a Pokétwo embed."""
     text_parts = [embed.description or ""]
-    text_parts.append(embed.author.name or "")
     text_parts.extend(
         f"{field.name}\n{field.value}" for field in embed.fields
     )
@@ -336,7 +328,7 @@ class TypeRegionPings(commands.Cog):
 
         reference = ctx.message.reference
         if reference is None or reference.message_id is None:
-            return await ctx.send("❌ Reply to a Pokétwo embed titled **Quests**.")
+            return await ctx.send("❌ Reply to a Pokétwo embed.")
 
         replied_message = reference.resolved
         if not isinstance(replied_message, discord.Message):
@@ -350,20 +342,11 @@ class TypeRegionPings(commands.Cog):
             replied_message.author.id != POKETWO_BOT_ID
             and author_name != "poketwo"
         ):
-            return await ctx.send("❌ Reply to a Pokétwo embed titled **Quests**.")
+            return await ctx.send("❌ Reply to a Pokétwo embed.")
 
-        quests_embed = next(
-            (
-                embed for embed in replied_message.embeds
-                if "quests" in {
-                    (embed.title or "").strip().casefold(),
-                    (embed.author.name or "").strip().casefold(),
-                }
-            ),
-            None,
-        )
+        quests_embed = next(iter(replied_message.embeds), None)
         if quests_embed is None:
-            return await ctx.send("❌ Reply to a Pokétwo embed titled **Quests**.")
+            return await ctx.send("❌ Reply to a Pokétwo embed.")
 
         new_types, new_regions = parse_quest_pings(quests_embed)
         if not new_types and not new_regions:
