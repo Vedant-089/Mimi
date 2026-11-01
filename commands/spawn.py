@@ -289,8 +289,11 @@ class SpawnPredictor(commands.Cog):
 
     def _default_type_channel_data(self):
         return {
-            type_name: []
-            for type_name in self.typing_data.keys()
+            channel_type: []
+            for channel_type in (
+                list(self.typing_data.keys())
+                + list(self.region_data.keys())
+            )
         }
 
     def _read_type_channel_data(self):
@@ -660,9 +663,6 @@ class SpawnPredictor(commands.Cog):
                 message.guild.id,
                 db,
             )
-            if not naming_enabled:
-                return
-
             overall_start = time.perf_counter()
             image_url = message.embeds[0].image.url
 
@@ -782,16 +782,8 @@ class SpawnPredictor(commands.Cog):
                 get_users_region_ping(name, message.guild.id, db),
             )
 
-            if is_only_ping_enabled() and not (
-                hunters
-                or collectors
-                or reserves
-                or type_ping_users
-                or region_ping_users
-            ):
-                return
-
             types = self.get_pokemon_types(name)
+            regions = self.get_pokemon_regions(name)
             rares = self.get_rare_flags(name)
             regionals = self.get_regional_flags(name)
 
@@ -808,7 +800,7 @@ class SpawnPredictor(commands.Cog):
             )
 
             if (
-                types
+                (types or regions)
                 and self.is_type_enabled()
                 and message.guild
                 and message.guild.id in TYPE_CHANNEL_SYNC_GUILD_IDS
@@ -816,12 +808,21 @@ class SpawnPredictor(commands.Cog):
                 type_sync_task = asyncio.create_task(
                     self.sync_type_channel_data(
                         message.channel.id,
-                        types,
+                        types + regions,
                     )
                 )
                 type_sync_task.add_done_callback(
                     self._log_background_task_exception
                 )
+
+            if is_only_ping_enabled() and not (
+                hunters
+                or collectors
+                or reserves
+                or type_ping_users
+                or region_ping_users
+            ):
+                return
 
             rare_role_mentions = []
 
@@ -1099,7 +1100,10 @@ class SpawnPredictor(commands.Cog):
             )
             return
 
-        if type_name not in self.typing_data:
+        if (
+            type_name not in self.typing_data
+            and type_name not in self.region_data
+        ):
             await ctx.send(
                 f"❌ Unknown type: {type_name}"
             )
