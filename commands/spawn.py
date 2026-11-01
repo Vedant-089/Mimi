@@ -38,7 +38,7 @@ TYPE_CHANNEL_SYNC_GUILD_IDS = {
     1429413142319988788,
     1429413395769065614,
 }
-MODEL_PATH = "pokemon_student_int8.onnx"
+MODEL_PATH = "pokemon_halloween_int8.onnx"
 IMG_SIZE = 224
 CONF_THRESHOLD = 0.30  # 30%
 RECOG_PATH = Path("recog.json")
@@ -47,7 +47,7 @@ TYPE_CHANNELS_PATH = Path("type_channels.json")
 if not os.path.exists(MODEL_PATH):
     print(f"Downloading {MODEL_PATH}...")
     urllib.request.urlretrieve(
-        "https://huggingface.co/veduxd/pokemon_model/resolve/main/pokemon_student_int8.onnx",
+        "https://huggingface.co/veduxd/pokemon_model/resolve/main/pokemon_halloween_int8.onnx",
         MODEL_PATH
     )
     print(f"{MODEL_PATH} downloaded.")

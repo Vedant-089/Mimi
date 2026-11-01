@@ -108,7 +108,7 @@
     "unown question"
   ],
   "pichu": [
-    "spiky eared pichu"
+    "spiky-eared pichu"
   ],
   "zigzagoon": [
     "galarian zigzagoon"
@@ -373,5 +373,21 @@
     "summer deerling",
     "autumn deerling",
     "winter deerling"
+  ],
+  "Meowscarada": [
+    "Oracle Meowscarada",
+    "Witch Meowscarada"
+  ],
+  "applin": [
+    "enchanted applin",
+    "rotten applin"
+  ],
+  "reuniclus": [
+    "Elixir Reuniclus",
+    "Cauldron Reuniclus"
+  ],
+  "simipour": [
+    "medusa simipour",
+    "statue simipour"
   ]
 }
