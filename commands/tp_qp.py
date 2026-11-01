@@ -14,6 +14,7 @@ with open("region.json", "r", encoding="utf-8") as f:
 
 ALL_TYPES = [t for t in TYPING_DATA.keys() if t != "???"]
 ALL_REGIONS = [r for r in REGION_DATA.keys() if r != "???"]
+POKETWO_BOT_ID = 716390085896962058
 
 
 def get_pokemons_for_types(selected_types):
@@ -48,10 +49,15 @@ def parse_user_enabled_keys(raw_data, key_name):
 
 def parse_quest_pings(embed: discord.Embed):
     """Extract type and region names from a Pokétwo quests embed."""
-    if (embed.title or "").strip().casefold() != "quests":
+    heading_names = {
+        (embed.title or "").strip().casefold(),
+        (embed.author.name or "").strip().casefold(),
+    }
+    if "quests" not in heading_names:
         return set(), set()
 
     text_parts = [embed.description or ""]
+    text_parts.append(embed.author.name or "")
     text_parts.extend(
         f"{field.name}\n{field.value}" for field in embed.fields
     )
@@ -340,13 +346,19 @@ class TypeRegionPings(commands.Cog):
                 return await ctx.send("❌ I could not read the replied-to message.")
 
         author_name = replied_message.author.name.casefold().replace("é", "e")
-        if author_name != "poketwo":
+        if (
+            replied_message.author.id != POKETWO_BOT_ID
+            and author_name != "poketwo"
+        ):
             return await ctx.send("❌ Reply to a Pokétwo embed titled **Quests**.")
 
         quests_embed = next(
             (
                 embed for embed in replied_message.embeds
-                if (embed.title or "").strip().casefold() == "quests"
+                if "quests" in {
+                    (embed.title or "").strip().casefold(),
+                    (embed.author.name or "").strip().casefold(),
+                }
             ),
             None,
         )
