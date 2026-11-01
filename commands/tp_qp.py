@@ -45,7 +45,7 @@ def parse_user_enabled_keys(raw_data, key_name):
 
 
 def parse_quest_pings(message: discord.Message):
-    """Extract type and region names from a replied Pokétwo message."""
+    """Extract type and region names from any replied message."""
     text_parts = [message.content or ""]
     for embed in message.embeds:
         text_parts.extend([
@@ -323,7 +323,7 @@ class TypeRegionPings(commands.Cog):
     @commands.command(name="event", aliases=["ev"])
     @commands.guild_only()
     async def event_pings_cmd(self, ctx):
-        """Adds type and region pings found in a replied-to Pokétwo quests embed."""
+        """Adds type and region pings found in any replied-to text."""
         if is_suspended(ctx.author):
             return await ctx.send(
                 "❌ You are suspended from using Mimi and cannot add pings."
@@ -331,7 +331,7 @@ class TypeRegionPings(commands.Cog):
 
         reference = ctx.message.reference
         if reference is None or reference.message_id is None:
-            return await ctx.send("❌ Reply to a Pokétwo message.")
+            return await ctx.send("❌ Reply to a message containing quest descriptions.")
 
         try:
             replied_message = await ctx.channel.fetch_message(reference.message_id)
@@ -388,7 +388,7 @@ class TypeRegionPings(commands.Cog):
                 f"regions: {', '.join(name.capitalize() for name in added_regions)}"
             )
         if not added:
-            return await ctx.send("✅ All quests in that embed are already in your pings.")
+            return await ctx.send("✅ All quests in that message are already in your pings.")
         await ctx.send(f"✅ Added event pings — {'; '.join(added)}.")
 
 
