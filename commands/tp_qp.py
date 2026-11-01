@@ -44,12 +44,18 @@ def parse_user_enabled_keys(raw_data, key_name):
     return set()
 
 
-def parse_quest_pings(embed: discord.Embed):
-    """Extract type and region names from a Pokétwo embed."""
-    text_parts = [embed.description or ""]
-    text_parts.extend(
-        f"{field.name}\n{field.value}" for field in embed.fields
-    )
+def parse_quest_pings(message: discord.Message):
+    """Extract type and region names from a replied Pokétwo message."""
+    text_parts = [message.content or ""]
+    for embed in message.embeds:
+        text_parts.extend([
+            embed.title or "",
+            embed.description or "",
+            embed.author.name if embed.author else "",
+        ])
+        text_parts.extend(
+            f"{field.name}\n{field.value}" for field in embed.fields
+        )
     text = "\n".join(text_parts).casefold()
 
     type_pattern = "|".join(
@@ -325,21 +331,17 @@ class TypeRegionPings(commands.Cog):
 
         reference = ctx.message.reference
         if reference is None or reference.message_id is None:
-            return await ctx.send("❌ Reply to a Pokétwo embed.")
+            return await ctx.send("❌ Reply to a Pokétwo message.")
 
         try:
             replied_message = await ctx.channel.fetch_message(reference.message_id)
         except discord.HTTPException:
             return await ctx.send("❌ I could not read the replied-to message.")
 
-        quests_embed = next(iter(replied_message.embeds), None)
-        if quests_embed is None:
-            return await ctx.send("❌ The replied message does not contain an embed.")
-
-        new_types, new_regions = parse_quest_pings(quests_embed)
+        new_types, new_regions = parse_quest_pings(replied_message)
         if not new_types and not new_regions:
             return await ctx.send(
-                "❌ I could not find any type or region quests in that embed."
+                "❌ I could not find any type or region quests in that message."
             )
 
         row = await db.fetchrow(
