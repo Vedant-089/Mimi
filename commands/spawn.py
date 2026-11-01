@@ -24,6 +24,8 @@ from functions import (
     get_users_reserved,
     get_users_type_ping,
     get_users_region_ping,
+    get_grind_support_users,
+    GRIND_SUPPORT_SERVER_IDS,
     get_server_spawn_settings,
     is_only_ping_enabled,
     set_poketwo_send_permission,
@@ -638,16 +640,19 @@ class SpawnPredictor(commands.Cog):
         ):
             return
 
-        if message.guild:
+        grind_support_users = set()
+        if message.guild and message.guild.id in GRIND_SUPPORT_SERVER_IDS:
             try:
-                await set_poketwo_send_permission(
-                    message.guild,
-                    message.channel,
-                    False,
-                )
+                grind_support_users = await get_grind_support_users(db)
+                if not grind_support_users:
+                    await set_poketwo_send_permission(
+                        message.guild,
+                        message.channel,
+                        False,
+                    )
             except Exception as error:
                 print(
-                    f"⚠️ Failed to pause Pokétwo after spawn in "
+                    f"⚠️ Failed to check grind support before spawn in "
                     f"{message.guild.id}/{message.channel.id}: {error}"
                 )
 
@@ -780,6 +785,28 @@ class SpawnPredictor(commands.Cog):
                 get_users_type_ping(name, message.guild.id, db),
                 get_users_region_ping(name, message.guild.id, db),
             )
+
+            if (
+                grind_support_users
+                and grind_support_users.intersection(
+                    hunters
+                    + collectors
+                    + reserves
+                    + type_ping_users
+                    + region_ping_users
+                )
+            ):
+                try:
+                    await set_poketwo_send_permission(
+                        message.guild,
+                        message.channel,
+                        False,
+                    )
+                except Exception as error:
+                    print(
+                        f"⚠️ Failed to pause Pokétwo after matching spawn in "
+                        f"{message.guild.id}/{message.channel.id}: {error}"
+                    )
 
             types = self.get_pokemon_types(name)
             regions = self.get_pokemon_regions(name)

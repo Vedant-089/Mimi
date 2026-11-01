@@ -5,6 +5,7 @@ from database import db
 from functions import (
     ensure_ping_tables,
     GRIND_SUPPORT_SERVER_IDS,
+    is_suspended,
     set_poketwo_send_permission,
 )
 
@@ -15,6 +16,47 @@ class GrindSupport(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         await ensure_ping_tables(db)
+
+    @commands.command(name="gs")
+    @commands.guild_only()
+    async def grind_support(self, ctx, setting: str = None):
+        if ctx.guild.id not in GRIND_SUPPORT_SERVER_IDS:
+            return await ctx.send(
+                "❌ This command is only available in grind-support servers."
+            )
+        if setting is not None and is_suspended(ctx.author):
+            return await ctx.send(
+                "❌ You are suspended from using Mimi and cannot change grind support."
+            )
+        if setting is None or setting.casefold() not in {"true", "false"}:
+            current = await db.fetchval(
+                """
+                SELECT COALESCE(grind_support, false)
+                FROM shiny_hunt
+                WHERE userid = $1
+                """,
+                ctx.author.id,
+            )
+            status = "true" if current else "false"
+            return await ctx.send(
+                f"Grind support is currently **{status}**. "
+                "Use `m!gs true` or `m!gs false`."
+            )
+
+        enabled = setting.casefold() == "true"
+        await db.execute(
+            """
+            INSERT INTO shiny_hunt (userid, grind_support)
+            VALUES ($1, $2)
+            ON CONFLICT (userid) DO UPDATE
+            SET grind_support = EXCLUDED.grind_support
+            """,
+            ctx.author.id,
+            enabled,
+        )
+        await ctx.send(
+            f"✅ Grind support set to **{str(enabled).lower()}**."
+        )
 
     @commands.command(name="pause")
     @commands.guild_only()

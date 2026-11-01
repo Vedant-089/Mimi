@@ -574,6 +574,17 @@ async def get_users_region_ping(pokemon_name: str, guild_id: int, db_instance):
     return list(set(guild_cache.get(name, [])))
 
 
+async def get_grind_support_users(db_instance):
+    rows = await db_instance.fetch(
+        """
+        SELECT userid
+        FROM shiny_hunt
+        WHERE grind_support = true
+        """
+    )
+    return {row["userid"] for row in rows}
+
+
 async def warm_ping_caches(db_instance, server_ids=None):
     await asyncio.gather(
         refresh_hunt_cache(db_instance, server_ids),
