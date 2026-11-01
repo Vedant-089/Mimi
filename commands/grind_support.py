@@ -4,7 +4,14 @@ import discord
 from discord.ext import commands
 
 from database import db
-from functions import advance_grind_support, ensure_ping_tables, is_suspended
+from functions import (
+    advance_grind_support,
+    ensure_ping_tables,
+    GRIND_SUPPORT_SERVER_IDS,
+    is_suspended,
+    set_poketwo_send_permission,
+    set_grind_support_enabled,
+)
 
 
 POKETWO_BOT_ID = 716390085896962058
@@ -52,9 +59,66 @@ class GrindSupport(commands.Cog):
             ctx.author.id,
             enabled,
         )
+        await set_grind_support_enabled(db, ctx.author.id, enabled)
         await ctx.send(
             f"✅ Grind support **{'enabled' if enabled else 'disabled'}**."
         )
+
+    @commands.command(name="pause")
+    @commands.guild_only()
+    @commands.has_permissions(administrator=True)
+    async def pause_poketwo(self, ctx, scope: str = ""):
+        if ctx.guild.id not in GRIND_SUPPORT_SERVER_IDS:
+            return await ctx.send(
+                "❌ This command is only available in grind-support servers."
+            )
+        if scope.casefold() not in {"", "all"}:
+            return await ctx.send("❌ Usage: `m!pause` or `m!pause all`.")
+
+        channels = (
+            ctx.guild.text_channels
+            if scope.casefold() == "all"
+            else [ctx.channel]
+        )
+        changed = 0
+        for channel in channels:
+            try:
+                if await set_poketwo_send_permission(ctx.guild, channel, False):
+                    changed += 1
+            except Exception as error:
+                print(
+                    f"⚠️ Failed to pause Pokétwo in "
+                    f"{ctx.guild.id}/{channel.id}: {error}"
+                )
+        await ctx.send(f"✅ Pokétwo sending paused in {changed} channel(s).")
+
+    @commands.command(name="resume")
+    @commands.guild_only()
+    @commands.has_permissions(administrator=True)
+    async def resume_poketwo(self, ctx, scope: str = ""):
+        if ctx.guild.id not in GRIND_SUPPORT_SERVER_IDS:
+            return await ctx.send(
+                "❌ This command is only available in grind-support servers."
+            )
+        if scope.casefold() not in {"", "all"}:
+            return await ctx.send("❌ Usage: `m!resume` or `m!resume all`.")
+
+        channels = (
+            ctx.guild.text_channels
+            if scope.casefold() == "all"
+            else [ctx.channel]
+        )
+        changed = 0
+        for channel in channels:
+            try:
+                if await set_poketwo_send_permission(ctx.guild, channel, None):
+                    changed += 1
+            except Exception as error:
+                print(
+                    f"⚠️ Failed to resume Pokétwo in "
+                    f"{ctx.guild.id}/{channel.id}: {error}"
+                )
+        await ctx.send(f"✅ Pokétwo sending resumed in {changed} channel(s).")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -71,6 +135,7 @@ class GrindSupport(commands.Cog):
                 message.channel.id,
                 message.author.id,
                 match.group(1),
+                message.guild.id if message.guild else None,
             )
         except Exception as error:
             print(f"⚠️ Failed to advance grind support: {error}")

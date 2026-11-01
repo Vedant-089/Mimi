@@ -27,6 +27,7 @@ from functions import (
     get_server_spawn_settings,
     is_only_ping_enabled,
     record_grind_support_spawns,
+    set_poketwo_send_permission,
     update_and_check_incense,
     parse_incense_footer,
     warm_ping_caches,
@@ -635,6 +636,19 @@ class SpawnPredictor(commands.Cog):
         ):
             return
 
+        if message.guild:
+            try:
+                await set_poketwo_send_permission(
+                    message.guild,
+                    message.channel,
+                    False,
+                )
+            except Exception as error:
+                print(
+                    f"⚠️ Failed to pause Pokétwo after spawn in "
+                    f"{message.guild.id}/{message.channel.id}: {error}"
+                )
+
         if not self.is_recognition_enabled():
             return
 
@@ -874,6 +888,7 @@ class SpawnPredictor(commands.Cog):
                 grind_task = asyncio.create_task(
                     record_grind_support_spawns(
                         db,
+                        message.guild.id,
                         message.channel.id,
                         display_name,
                         grind_ping_users,

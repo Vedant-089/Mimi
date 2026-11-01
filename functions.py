@@ -7,6 +7,33 @@ from collections import defaultdict
 ALLOWED_ROLES_FILE = "allowed_roles.json"
 SUSPENDED_USERS_FILE = "suspended.json"
 ONLY_PING_FILE = "only_ping.json"
+POKETWO_BOT_ID = 716390085896962058
+GRIND_SUPPORT_SERVER_IDS = frozenset({
+    1322103302888095837,
+    1429413142319988788,
+    1429413395769065614,
+})
+
+
+async def set_poketwo_send_permission(guild, channel, allowed: bool | None):
+    if guild is None or guild.id not in GRIND_SUPPORT_SERVER_IDS:
+        return False
+
+    poketwo = guild.get_member(POKETWO_BOT_ID)
+    if poketwo is None:
+        poketwo = await guild.fetch_member(POKETWO_BOT_ID)
+
+    if isinstance(channel, discord.Thread):
+        channel = channel.parent
+    if channel is None:
+        return False
+
+    await channel.set_permissions(
+        poketwo,
+        send_messages=allowed,
+        reason="Grind support channel control",
+    )
+    return True
 
 
 def is_only_ping_enabled() -> bool:
@@ -100,6 +127,12 @@ _type_ping_cache = defaultdict(lambda: defaultdict(list))
 _region_ping_cache = defaultdict(lambda: defaultdict(list))
 _tp_qp_cache_last_updated = 0
 _tp_qp_cache_lock = asyncio.Lock()
+
+# userid -> queued grind-support spawns, ordered by spawn_order
+_grind_support_cache = defaultdict(list)
+_grind_support_users = set()
+_grind_support_cache_last_updated = 0
+_grind_support_cache_lock = asyncio.Lock()
 
 PING_TABLES_SQL = [
     """
@@ -401,54 +434,114 @@ def invalidate_collection_cache():
         _collection_cache_last_updated = 0.001
 
 
+async def refresh_grind_support_cache(db_instance):
+    global _grind_support_cache
+    global _grind_support_users, _grind_support_cache_last_updated
+    async with _grind_support_cache_lock:
+        try:
+            enabled_rows = await db_instance.fetch(
+                """
+                SELECT userid
+                FROM shiny_hunt
+                WHERE grind_support = true
+                """
+            )
+            queue_rows = await db_instance.fetch(
+                """
+                SELECT id, channelid, pokemon_name, userid, spawn_order
+                FROM grind_support
+                ORDER BY userid, spawn_order
+                """
+            )
+            temp_cache = defaultdict(list)
+            for row in queue_rows:
+                temp_cache[row["userid"]].append({
+                    "id": row["id"],
+                    "channelid": row["channelid"],
+                    "pokemon_name": row["pokemon_name"],
+                    "spawn_order": row["spawn_order"],
+                })
+            _grind_support_users = {
+                row["userid"] for row in enabled_rows
+            }
+            _grind_support_cache = temp_cache
+            _grind_support_cache_last_updated = time.time()
+        except Exception as e:
+            print("❌ Grind Support Cache Refresh Error:", e)
+
+
+async def set_grind_support_enabled(
+    db_instance,
+    user_id: int,
+    enabled: bool,
+):
+    global _grind_support_cache_last_updated
+    if _grind_support_cache_last_updated == 0:
+        await refresh_grind_support_cache(db_instance)
+    async with _grind_support_cache_lock:
+        if enabled:
+            _grind_support_users.add(user_id)
+        else:
+            _grind_support_users.discard(user_id)
+
+
 async def record_grind_support_spawns(
     db_instance,
+    guild_id: int,
     channel_id: int,
     pokemon_name: str,
     user_ids,
 ):
-    """Record this spawn for enabled users who were eligible for its ping."""
+    """Record an eligible spawn for enabled users in supported servers."""
+    if guild_id not in GRIND_SUPPORT_SERVER_IDS:
+        return
+
     unique_user_ids = list(dict.fromkeys(user_ids))
     if not unique_user_ids:
         return
 
-    enabled_rows = await db_instance.fetch(
-        """
-        SELECT userid
-        FROM shiny_hunt
-        WHERE grind_support = true
-          AND userid = ANY($1::bigint[])
-        """,
-        unique_user_ids,
-    )
+    if _grind_support_cache_last_updated == 0:
+        await refresh_grind_support_cache(db_instance)
 
-    if not enabled_rows:
-        return
+    async with _grind_support_cache_lock:
+        eligible_user_ids = [
+            user_id
+            for user_id in unique_user_ids
+            if user_id in _grind_support_users
+        ]
+        if not eligible_user_ids:
+            return
 
-    async with db_instance.pool.acquire() as connection:
-        async with connection.transaction():
-            for row in enabled_rows:
-                user_id = row["userid"]
-                await connection.execute("SELECT pg_advisory_xact_lock($1)", user_id)
-                next_order = await connection.fetchval(
-                    """
-                    SELECT COALESCE(MAX(spawn_order), 0) + 1
-                    FROM grind_support
-                    WHERE userid = $1
-                    """,
-                    user_id,
-                )
-                await connection.execute(
-                    """
-                    INSERT INTO grind_support
-                        (channelid, pokemon_name, userid, spawn_order)
-                    VALUES ($1, $2, $3, $4)
-                    """,
-                    channel_id,
-                    pokemon_name,
-                    user_id,
-                    next_order,
-                )
+        queued_rows = []
+        async with db_instance.pool.acquire() as connection:
+            async with connection.transaction():
+                for user_id in eligible_user_ids:
+                    user_queue = _grind_support_cache[user_id]
+                    next_order = (
+                        user_queue[-1]["spawn_order"] + 1
+                        if user_queue
+                        else 1
+                    )
+                    row = await connection.fetchrow(
+                        """
+                        INSERT INTO grind_support
+                            (channelid, pokemon_name, userid, spawn_order)
+                        VALUES ($1, $2, $3, $4)
+                        RETURNING id
+                        """,
+                        channel_id,
+                        pokemon_name,
+                        user_id,
+                        next_order,
+                    )
+                    queued_rows.append((user_id, {
+                        "id": row["id"],
+                        "channelid": channel_id,
+                        "pokemon_name": pokemon_name,
+                        "spawn_order": next_order,
+                    }))
+        for user_id, queued_row in queued_rows:
+            _grind_support_cache[user_id].append(queued_row)
 
 
 async def advance_grind_support(
@@ -456,53 +549,40 @@ async def advance_grind_support(
     channel_id: int,
     user_id: int,
     caught_name: str,
+    guild_id: int | None = None,
 ):
     """Remove a matching caught spawn and return the user's next queued spawn."""
-    enabled = await db_instance.fetchval(
-        """
-        SELECT COALESCE(grind_support, false)
-        FROM shiny_hunt
-        WHERE userid = $1
-        """,
-        user_id,
-    )
-    if not enabled:
+    if guild_id not in GRIND_SUPPORT_SERVER_IDS:
         return None
 
-    rows = await db_instance.fetch(
-        """
-        SELECT id, channelid, pokemon_name
-        FROM grind_support
-        WHERE channelid = $1 AND userid = $2
-        ORDER BY spawn_order
-        """,
-        channel_id,
-        user_id,
-    )
-    caught_key = resolve_alias(caught_name)
-    matched_id = None
-    for row in rows:
-        if resolve_alias(row["pokemon_name"]) == caught_key:
-            matched_id = row["id"]
-            break
+    if _grind_support_cache_last_updated == 0:
+        await refresh_grind_support_cache(db_instance)
 
-    if matched_id is None:
-        return None
+    async with _grind_support_cache_lock:
+        if user_id not in _grind_support_users:
+            return None
 
-    await db_instance.execute(
-        "DELETE FROM grind_support WHERE id = $1",
-        matched_id,
-    )
-    return await db_instance.fetchrow(
-        """
-        SELECT channelid, pokemon_name
-        FROM grind_support
-        WHERE userid = $1
-        ORDER BY spawn_order
-        LIMIT 1
-        """,
-        user_id,
-    )
+        caught_key = resolve_alias(caught_name)
+        user_queue = _grind_support_cache.get(user_id, [])
+        matched_index = next(
+            (
+                index
+                for index, row in enumerate(user_queue)
+                if row["channelid"] == channel_id
+                and resolve_alias(row["pokemon_name"]) == caught_key
+            ),
+            None,
+        )
+        if matched_index is None:
+            return None
+
+        matched_row = user_queue[matched_index]
+        await db_instance.execute(
+            "DELETE FROM grind_support WHERE id = $1",
+            matched_row["id"],
+        )
+        user_queue.pop(matched_index)
+        return user_queue[0] if user_queue else None
 
 
 async def get_users_collecting(pokemon_name: str, guild_id: int, db_instance):
@@ -649,6 +729,7 @@ async def warm_ping_caches(db_instance, server_ids=None):
         refresh_collection_cache(db_instance),
         refresh_reserve_cache(db_instance),
         refresh_tp_qp_cache(db_instance),
+        refresh_grind_support_cache(db_instance),
         warm_perk_cache(db_instance),
     )
 
