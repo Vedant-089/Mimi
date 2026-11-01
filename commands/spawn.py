@@ -639,6 +639,15 @@ class SpawnPredictor(commands.Cog):
             return
 
         try:
+            if message.guild is None:
+                return
+
+            naming_enabled, shiny_hunt_prio = await get_server_spawn_settings(
+                message.guild.id,
+                db,
+            )
+            if not naming_enabled:
+                return
 
             overall_start = time.perf_counter()
             image_url = message.embeds[0].image.url
@@ -751,16 +760,13 @@ class SpawnPredictor(commands.Cog):
                 reserves,
                 type_ping_users,
                 region_ping_users,
-                spawn_settings,
             ) = await asyncio.gather(
                 get_users_hunting(name, message.guild.id, db),
                 get_users_collecting(name, message.guild.id, db),
                 get_users_reserved(name, message.guild.id, db),
                 get_users_type_ping(name, message.guild.id, db),
                 get_users_region_ping(name, message.guild.id, db),
-                get_server_spawn_settings(message.guild.id, db),
             )
-            naming_enabled, shiny_hunt_prio = spawn_settings
 
             if is_only_ping_enabled() and not (
                 hunters
