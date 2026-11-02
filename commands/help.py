@@ -47,8 +47,8 @@ HELP_PAGES_DATA = [
     {
         "title": "🎯 Type & Region Ping Commands",
         "description": (
-            "• `m!tp` - Opens the interactive Type Pings embed with toggle buttons and dropdown.\n"
-            "• `m!rp` (`m!qp`) - Opens the interactive Region Pings embed with toggle buttons and dropdown.\n"
+            "• `m!tp` - Opens the interactive Type Pings embed with one button per type. Use `m!tp <types>` to add types or `m!tp remove <types>` to remove them.\n"
+            "• `m!rp` (`m!qp`) - Opens the interactive Region Pings embed with one button per region. Use `m!qp <regions>` to add regions or `m!qp remove <regions>` to remove them.\n"
             "• `m!event` (`m!ev`) - Reply to a Pokétwo Quests embed to add its type and region quests to your pings."
         ),
     },

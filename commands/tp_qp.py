@@ -78,210 +78,193 @@ def build_ping_payload(names, key_name, pokemon_resolver):
     })
 
 
+def parse_ping_arguments(arguments, valid_names):
+    tokens = [
+        token.strip().casefold()
+        for argument in arguments
+        for token in argument.split(",")
+        if token.strip()
+    ]
+    remove = bool(tokens and tokens[0] in {"remove", "r", "remove/r"})
+    if remove:
+        tokens.pop(0)
+    invalid = sorted(set(token for token in tokens if token not in valid_names))
+    if invalid:
+        return remove, set(), invalid
+    return remove, set(tokens), []
+
+
 # ==================================================
-# TYPE PINGS VIEW & SELECT
+# TYPE AND REGION PING VIEWS
 # ==================================================
 
-class TypeSelect(discord.ui.Select):
-    def __init__(self, active_types):
-        options = [
-            discord.SelectOption(
-                label=t.capitalize(),
-                value=t,
-                default=(t in active_types)
-            )
-            for t in ALL_TYPES
-        ]
+class PingToggleButton(discord.ui.Button):
+    def __init__(self, name: str, kind: str, row: int):
         super().__init__(
-            placeholder="Select type pings to toggle...",
-            min_values=0,
-            max_values=len(options),
-            options=options,
-            row=0
+            label=name.capitalize(),
+            style=discord.ButtonStyle.secondary,
+            row=row,
+            custom_id=f"toggle_{kind}_{name}",
         )
+        self.name = name
+        self.kind = kind
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.view.author_id:
+        view = self.view
+        if view is None or interaction.user.id != view.author_id:
             return await interaction.response.send_message(
                 "❌ You cannot use this menu!", ephemeral=True
             )
-
-        selected_types = self.values
-        await self.view.update_type_settings(interaction, selected_types)
+        await view.toggle_ping(interaction, self.name)
 
 
-class TypePingView(discord.ui.View):
-    def __init__(self, author_id: int, server_id: int, active_types: set):
+class PingView(discord.ui.View):
+    kind = ""
+    title = ""
+    all_names = ()
+
+    def __init__(self, author_id: int, server_id: int, active_names: set):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.server_id = server_id
-        self.active_types = set(active_types)
+        self.active_names = set(active_names)
 
-        self.select_menu = TypeSelect(self.active_types)
-        self.add_item(self.select_menu)
+        for index, name in enumerate(self.all_names):
+            self.add_item(PingToggleButton(name, self.kind, index // 5))
+
+        control_row = (len(self.all_names) + 4) // 5
+        self.add_item(
+            discord.ui.Button(
+                label="All On",
+                style=discord.ButtonStyle.success,
+                row=control_row,
+                custom_id=f"{self.kind}_all_on",
+            )
+        )
+        self.children[-1].callback = self.all_on
+        self.add_item(
+            discord.ui.Button(
+                label="All Off",
+                style=discord.ButtonStyle.danger,
+                row=control_row,
+                custom_id=f"{self.kind}_all_off",
+            )
+        )
+        self.children[-1].callback = self.all_off
+        self.refresh_buttons()
 
     def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(
-            title="Type Pings",
-            color=discord.Color.purple()
+        embed = discord.Embed(title=self.title, color=discord.Color.purple())
+        embed.description = "\n".join(
+            f"{'🟢' if name in self.active_names else '🔴'} **{name.capitalize()}**"
+            for name in self.all_names
         )
-        lines = []
-        for t in ALL_TYPES:
-            icon = "🟢" if t in self.active_types else "🔴"
-            lines.append(f"{icon} **{t.capitalize()}**")
-
-        embed.description = "\n".join(lines)
-        embed.set_footer(text="Use the dropdown or buttons below to update your type pings.")
+        embed.set_footer(text="Use the buttons below to update your pings.")
         return embed
 
-    def update_select_defaults(self):
-        for option in self.select_menu.options:
-            option.default = (option.value in self.active_types)
+    def refresh_buttons(self):
+        for button in self.children:
+            if isinstance(button, PingToggleButton):
+                enabled = button.name in self.active_names
+                button.style = (
+                    discord.ButtonStyle.success
+                    if enabled
+                    else discord.ButtonStyle.secondary
+                )
+                button.label = (
+                    f"✅ {button.name.capitalize()}"
+                    if enabled
+                    else button.name.capitalize()
+                )
+
+    async def toggle_ping(self, interaction: discord.Interaction, name: str):
+        if is_suspended(interaction.user):
+            return await interaction.response.send_message(
+                "❌ You are suspended from using Mimi and cannot add pings.",
+                ephemeral=True,
+            )
+        if name in self.active_names:
+            self.active_names.remove(name)
+        else:
+            self.active_names.add(name)
+        await self.save_to_db()
+        self.refresh_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def all_on(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message(
+                "❌ You cannot use this menu!", ephemeral=True
+            )
+        await self.update_settings(interaction, self.all_names)
+
+    async def all_off(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message(
+                "❌ You cannot use this menu!", ephemeral=True
+            )
+        await self.update_settings(interaction, [])
+
+    async def update_settings(self, interaction: discord.Interaction, names):
+        if is_suspended(interaction.user):
+            return await interaction.response.send_message(
+                "❌ You are suspended from using Mimi and cannot add pings.",
+                ephemeral=True,
+            )
+        self.active_names = set(names)
+        await self.save_to_db()
+        self.refresh_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+
+class TypePingView(PingView):
+    kind = "type"
+    title = "Type Pings"
+    all_names = tuple(ALL_TYPES)
 
     async def save_to_db(self):
-        selected = sorted(self.active_types)
-        pokemons = get_pokemons_for_types(selected)
-        payload = json.dumps({"types": selected, "pokemons": pokemons})
-
-        query = """
+        selected = sorted(self.active_names)
+        payload = json.dumps({
+            "types": selected,
+            "pokemons": get_pokemons_for_types(selected),
+        })
+        await db.execute(
+            """
             INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
             VALUES ($1, $2, $3, NULL)
             ON CONFLICT (serverid, userid)
             DO UPDATE SET type_pings = EXCLUDED.type_pings;
-        """
-        await db.execute(query, self.server_id, self.author_id, payload)
+            """,
+            self.server_id,
+            self.author_id,
+            payload,
+        )
         await refresh_tp_qp_cache(db)
 
-    async def update_type_settings(self, interaction: discord.Interaction, new_types: list | set):
-        if is_suspended(interaction.user):
-            return await interaction.response.send_message(
-                "❌ You are suspended from using Mimi and cannot add pings.",
-                ephemeral=True,
-            )
-        self.active_types = set(new_types)
-        await self.save_to_db()
-        self.update_select_defaults()
-        embed = self.build_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="All On", style=discord.ButtonStyle.success, row=1)
-    async def all_on(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            return await interaction.response.send_message(
-                "❌ You cannot use this menu!", ephemeral=True
-            )
-        await self.update_type_settings(interaction, ALL_TYPES)
-
-    @discord.ui.button(label="All Off", style=discord.ButtonStyle.danger, row=1)
-    async def all_off(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            return await interaction.response.send_message(
-                "❌ You cannot use this menu!", ephemeral=True
-            )
-        await self.update_type_settings(interaction, [])
-
-
-# ==================================================
-# REGION PINGS VIEW & SELECT
-# ==================================================
-
-class RegionSelect(discord.ui.Select):
-    def __init__(self, active_regions):
-        options = [
-            discord.SelectOption(
-                label=r.capitalize(),
-                value=r,
-                default=(r in active_regions)
-            )
-            for r in ALL_REGIONS
-        ]
-        super().__init__(
-            placeholder="Select region pings to toggle...",
-            min_values=0,
-            max_values=len(options),
-            options=options,
-            row=0
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.view.author_id:
-            return await interaction.response.send_message(
-                "❌ You cannot use this menu!", ephemeral=True
-            )
-
-        selected_regions = self.values
-        await self.view.update_region_settings(interaction, selected_regions)
-
-
-class RegionPingView(discord.ui.View):
-    def __init__(self, author_id: int, server_id: int, active_regions: set):
-        super().__init__(timeout=180)
-        self.author_id = author_id
-        self.server_id = server_id
-        self.active_regions = set(active_regions)
-
-        self.select_menu = RegionSelect(self.active_regions)
-        self.add_item(self.select_menu)
-
-    def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(
-            title="Region Pings",
-            color=discord.Color.purple()
-        )
-        lines = []
-        for r in ALL_REGIONS:
-            icon = "🟢" if r in self.active_regions else "🔴"
-            lines.append(f"{icon} **{r.capitalize()}**")
-
-        embed.description = "\n".join(lines)
-        embed.set_footer(text="Use the dropdown or buttons below to update your region pings.")
-        return embed
-
-    def update_select_defaults(self):
-        for option in self.select_menu.options:
-            option.default = (option.value in self.active_regions)
+class RegionPingView(PingView):
+    kind = "region"
+    title = "Region Pings"
+    all_names = tuple(ALL_REGIONS)
 
     async def save_to_db(self):
-        selected = sorted(self.active_regions)
-        pokemons = get_pokemons_for_regions(selected)
-        payload = json.dumps({"regions": selected, "pokemons": pokemons})
-
-        query = """
+        selected = sorted(self.active_names)
+        payload = json.dumps({
+            "regions": selected,
+            "pokemons": get_pokemons_for_regions(selected),
+        })
+        await db.execute(
+            """
             INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
             VALUES ($1, $2, NULL, $3)
             ON CONFLICT (serverid, userid)
             DO UPDATE SET region_pings = EXCLUDED.region_pings;
-        """
-        await db.execute(query, self.server_id, self.author_id, payload)
+            """,
+            self.server_id,
+            self.author_id,
+            payload,
+        )
         await refresh_tp_qp_cache(db)
-
-    async def update_region_settings(self, interaction: discord.Interaction, new_regions: list | set):
-        if is_suspended(interaction.user):
-            return await interaction.response.send_message(
-                "❌ You are suspended from using Mimi and cannot add pings.",
-                ephemeral=True,
-            )
-        self.active_regions = set(new_regions)
-        await self.save_to_db()
-        self.update_select_defaults()
-        embed = self.build_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="All On", style=discord.ButtonStyle.success, row=1)
-    async def all_on(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            return await interaction.response.send_message(
-                "❌ You cannot use this menu!", ephemeral=True
-            )
-        await self.update_region_settings(interaction, ALL_REGIONS)
-
-    @discord.ui.button(label="All Off", style=discord.ButtonStyle.danger, row=1)
-    async def all_off(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            return await interaction.response.send_message(
-                "❌ You cannot use this menu!", ephemeral=True
-            )
-        await self.update_region_settings(interaction, [])
 
 
 # ==================================================
@@ -293,7 +276,7 @@ class TypeRegionPings(commands.Cog):
         self.bot = bot
 
     @commands.command(name="tp")
-    async def type_pings_cmd(self, ctx):
+    async def type_pings_cmd(self, ctx, *arguments):
         """Displays type pings embed with toggle options."""
         row = await db.fetchrow(
             "SELECT type_pings FROM tp_qp WHERE serverid = $1 AND userid = $2",
@@ -302,12 +285,48 @@ class TypeRegionPings(commands.Cog):
         )
         active_types = parse_user_enabled_keys(row["type_pings"] if row else None, "types")
 
+        if arguments:
+            remove, requested, invalid = parse_ping_arguments(arguments, set(ALL_TYPES))
+            if invalid:
+                return await ctx.send(
+                    f"❌ Unknown type(s): {', '.join(name.capitalize() for name in invalid)}."
+                )
+            if not requested:
+                return await ctx.send("❌ Specify one or more types.")
+            if is_suspended(ctx.author):
+                return await ctx.send(
+                    "❌ You are suspended from using Mimi and cannot add pings."
+                )
+            if remove:
+                active_types.difference_update(requested)
+                action = "Removed"
+            else:
+                active_types.update(requested)
+                action = "Added"
+            payload = build_ping_payload(active_types, "types", get_pokemons_for_types)
+            await db.execute(
+                """
+                INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+                VALUES ($1, $2, $3, NULL)
+                ON CONFLICT (serverid, userid)
+                DO UPDATE SET type_pings = EXCLUDED.type_pings;
+                """,
+                ctx.guild.id,
+                ctx.author.id,
+                payload,
+            )
+            await refresh_tp_qp_cache(db)
+            return await ctx.send(
+                f"✅ {action} type pings: "
+                f"{', '.join(name.capitalize() for name in sorted(requested))}."
+            )
+
         view = TypePingView(ctx.author.id, ctx.guild.id, active_types)
         embed = view.build_embed()
         await ctx.send(embed=embed, view=view)
 
     @commands.command(name="rp", aliases=["qp"])
-    async def region_pings_cmd(self, ctx):
+    async def region_pings_cmd(self, ctx, *arguments):
         """Displays region pings embed with toggle options."""
         row = await db.fetchrow(
             "SELECT region_pings FROM tp_qp WHERE serverid = $1 AND userid = $2",
@@ -315,6 +334,45 @@ class TypeRegionPings(commands.Cog):
             ctx.author.id
         )
         active_regions = parse_user_enabled_keys(row["region_pings"] if row else None, "regions")
+
+        if arguments:
+            remove, requested, invalid = parse_ping_arguments(arguments, set(ALL_REGIONS))
+            if invalid:
+                return await ctx.send(
+                    f"❌ Unknown region(s): "
+                    f"{', '.join(name.capitalize() for name in invalid)}."
+                )
+            if not requested:
+                return await ctx.send("❌ Specify one or more regions.")
+            if is_suspended(ctx.author):
+                return await ctx.send(
+                    "❌ You are suspended from using Mimi and cannot add pings."
+                )
+            if remove:
+                active_regions.difference_update(requested)
+                action = "Removed"
+            else:
+                active_regions.update(requested)
+                action = "Added"
+            payload = build_ping_payload(
+                active_regions, "regions", get_pokemons_for_regions
+            )
+            await db.execute(
+                """
+                INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+                VALUES ($1, $2, NULL, $3)
+                ON CONFLICT (serverid, userid)
+                DO UPDATE SET region_pings = EXCLUDED.region_pings;
+                """,
+                ctx.guild.id,
+                ctx.author.id,
+                payload,
+            )
+            await refresh_tp_qp_cache(db)
+            return await ctx.send(
+                f"✅ {action} region pings: "
+                f"{', '.join(name.capitalize() for name in sorted(requested))}."
+            )
 
         view = RegionPingView(ctx.author.id, ctx.guild.id, active_regions)
         embed = view.build_embed()
