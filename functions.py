@@ -99,6 +99,7 @@ async def wipe_user_data(db_instance, user_id: int):
         "collection_pings",
         "reserve_pings",
         "shiny_hunt",
+        "server_grind_support",
         "grind_support",
         "server_shiny_hunt",
         "tp_qp",
@@ -164,6 +165,13 @@ PING_TABLES_SQL = [
         userid BIGINT NOT NULL,
         spawn_order BIGINT NOT NULL,
         UNIQUE (userid, spawn_order)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS server_grind_support (
+        serverid BIGINT NOT NULL,
+        userid BIGINT NOT NULL,
+        PRIMARY KEY (serverid, userid)
     );
     """,
     """
@@ -574,13 +582,14 @@ async def get_users_region_ping(pokemon_name: str, guild_id: int, db_instance):
     return list(set(guild_cache.get(name, [])))
 
 
-async def get_grind_support_users(db_instance):
+async def get_grind_support_users(db_instance, server_id: int):
     rows = await db_instance.fetch(
         """
         SELECT userid
-        FROM shiny_hunt
-        WHERE grind_support = true
-        """
+        FROM server_grind_support
+        WHERE serverid = $1
+        """,
+        server_id,
     )
     return {row["userid"] for row in rows}
 

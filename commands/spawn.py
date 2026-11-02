@@ -643,18 +643,27 @@ class SpawnPredictor(commands.Cog):
         grind_support_users = set()
         if message.guild and message.guild.id in GRIND_SUPPORT_SERVER_IDS:
             try:
-                grind_support_users = await get_grind_support_users(db)
-                if not grind_support_users:
-                    await set_poketwo_send_permission(
-                        message.guild,
-                        message.channel,
-                        False,
-                    )
+                grind_support_users = await get_grind_support_users(
+                    db,
+                    message.guild.id,
+                )
             except Exception as error:
                 print(
                     f"⚠️ Failed to check grind support before spawn in "
                     f"{message.guild.id}/{message.channel.id}: {error}"
                 )
+            if not grind_support_users:
+                try:
+                    await set_poketwo_send_permission(
+                        message.guild,
+                        message.channel,
+                        False,
+                    )
+                except Exception as error:
+                    print(
+                        f"⚠️ Failed to pause Pokétwo before spawn in "
+                        f"{message.guild.id}/{message.channel.id}: {error}"
+                    )
 
         if not self.is_recognition_enabled():
             return

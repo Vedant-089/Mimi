@@ -31,10 +31,13 @@ class GrindSupport(commands.Cog):
         if setting is None or setting.casefold() not in {"true", "false"}:
             current = await db.fetchval(
                 """
-                SELECT COALESCE(grind_support, false)
-                FROM shiny_hunt
-                WHERE userid = $1
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM server_grind_support
+                    WHERE serverid = $1 AND userid = $2
+                )
                 """,
+                ctx.guild.id,
                 ctx.author.id,
             )
             status = "true" if current else "false"
@@ -44,16 +47,25 @@ class GrindSupport(commands.Cog):
             )
 
         enabled = setting.casefold() == "true"
-        await db.execute(
-            """
-            INSERT INTO shiny_hunt (userid, grind_support)
-            VALUES ($1, $2)
-            ON CONFLICT (userid) DO UPDATE
-            SET grind_support = EXCLUDED.grind_support
-            """,
-            ctx.author.id,
-            enabled,
-        )
+        if enabled:
+            await db.execute(
+                """
+                INSERT INTO server_grind_support (serverid, userid)
+                VALUES ($1, $2)
+                ON CONFLICT (serverid, userid) DO NOTHING
+                """,
+                ctx.guild.id,
+                ctx.author.id,
+            )
+        else:
+            await db.execute(
+                """
+                DELETE FROM server_grind_support
+                WHERE serverid = $1 AND userid = $2
+                """,
+                ctx.guild.id,
+                ctx.author.id,
+            )
         await ctx.send(
             f"✅ Grind support set to **{str(enabled).lower()}**."
         )
