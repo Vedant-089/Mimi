@@ -5,6 +5,7 @@ from database import Database
 from functions import ensure_ping_tables, warm_ping_caches
 import asyncio
 from dotenv import load_dotenv
+from rate_limit import install_rate_limit_logging
 
 load_dotenv()  # move this to top before any os.getenv calls
 
@@ -24,6 +25,7 @@ async def load_extensions():
 
 @bot.event
 async def on_ready():
+    install_rate_limit_logging(bot)
     print(f"Logged in as {bot.user.name}")
     await warm_ping_caches(bot.db, [guild.id for guild in bot.guilds])
 
