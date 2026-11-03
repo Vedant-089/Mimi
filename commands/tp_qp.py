@@ -3,7 +3,11 @@ import re
 import discord
 from discord.ext import commands
 from database import db
-from functions import is_suspended, refresh_tp_qp_cache
+from functions import (
+    is_suspended,
+    refresh_tp_qp_cache,
+    set_quest_requirements,
+)
 
 # Load type and region JSON mappings
 with open("typing.json", "r", encoding="utf-8") as f:
@@ -45,7 +49,7 @@ def parse_user_enabled_keys(raw_data, key_name):
 
 
 def parse_quest_pings(message: discord.Message):
-    """Extract type and region names from any replied message."""
+    """Extract type and region names and remaining counts from a quest message."""
     text_parts = [message.content or ""]
     for embed in message.embeds:
         text_parts.extend([
@@ -65,9 +69,37 @@ def parse_quest_pings(message: discord.Message):
         re.escape(region) for region in sorted(ALL_REGIONS, key=len, reverse=True)
     )
 
-    types = set(re.findall(rf"\b({type_pattern})-type\b", text))
-    regions = set(re.findall(rf"\b({region_pattern})\s+region\b", text))
-    return types, regions
+    types = set()
+    regions = set()
+    type_requirements = {}
+    region_requirements = {}
+
+    for line in text.splitlines():
+        progress_match = re.search(r"\((\d+)\s*/\s*(\d+)\)", line)
+        remaining = None
+        if progress_match:
+            remaining = max(
+                0,
+                int(progress_match.group(2)) - int(progress_match.group(1)),
+            )
+
+        line_types = set(re.findall(rf"\b({type_pattern})-type\b", line))
+        line_regions = set(re.findall(rf"\b({region_pattern})\s+region\b", line))
+        types.update(line_types)
+        regions.update(line_regions)
+        if remaining is not None:
+            for quest_type in line_types:
+                type_requirements[quest_type] = max(
+                    remaining,
+                    type_requirements.get(quest_type, 0),
+                )
+            for region in line_regions:
+                region_requirements[region] = max(
+                    remaining,
+                    region_requirements.get(region, 0),
+                )
+
+    return types, regions, type_requirements, region_requirements
 
 
 def build_ping_payload(names, key_name, pokemon_resolver):
@@ -396,7 +428,12 @@ class TypeRegionPings(commands.Cog):
         except discord.HTTPException:
             return await ctx.send("❌ I could not read the replied-to message.")
 
-        new_types, new_regions = parse_quest_pings(replied_message)
+        (
+            new_types,
+            new_regions,
+            type_requirements,
+            region_requirements,
+        ) = parse_quest_pings(replied_message)
         if not new_types and not new_regions:
             return await ctx.send(
                 "❌ I could not find any type or region quests in that message."
@@ -437,6 +474,12 @@ class TypeRegionPings(commands.Cog):
             build_ping_payload(active_regions, "regions", get_pokemons_for_regions),
         )
         await refresh_tp_qp_cache(db)
+        await set_quest_requirements(
+            ctx.guild.id,
+            ctx.author.id,
+            type_requirements,
+            region_requirements,
+        )
 
         added = []
         if added_types:

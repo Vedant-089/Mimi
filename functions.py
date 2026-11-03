@@ -128,6 +128,10 @@ _type_ping_cache = defaultdict(lambda: defaultdict(list))
 _region_ping_cache = defaultdict(lambda: defaultdict(list))
 _tp_qp_cache_last_updated = 0
 _tp_qp_cache_lock = asyncio.Lock()
+_quest_requirements = defaultdict(
+    lambda: {"types": {}, "regions": {}}
+)
+_quest_requirements_lock = asyncio.Lock()
 
 PING_TABLES_SQL = [
     """
@@ -580,6 +584,82 @@ async def get_users_region_ping(pokemon_name: str, guild_id: int, db_instance):
     name = pokemon_name.lower()
     guild_cache = _region_ping_cache.get(guild_id, {})
     return list(set(guild_cache.get(name, [])))
+
+
+async def set_quest_requirements(
+    server_id: int,
+    user_id: int,
+    type_requirements: dict[str, int],
+    region_requirements: dict[str, int],
+):
+    if server_id not in GRIND_SUPPORT_SERVER_IDS:
+        return
+
+    async with _quest_requirements_lock:
+        requirements = _quest_requirements[(server_id, user_id)]
+        for quest_type, remaining in type_requirements.items():
+            requirements["types"][quest_type] = max(0, remaining)
+        for region, remaining in region_requirements.items():
+            requirements["regions"][region] = max(0, remaining)
+
+
+async def limit_quest_ping_users(
+    server_id: int,
+    grind_support_users: set[int],
+    type_ping_users: list[int],
+    region_ping_users: list[int],
+    pokemon_types: list[str],
+    pokemon_regions: list[str],
+):
+    if server_id not in GRIND_SUPPORT_SERVER_IDS or not grind_support_users:
+        return type_ping_users, region_ping_users
+
+    async with _quest_requirements_lock:
+        limited_type_users = []
+        for user_id in type_ping_users:
+            if user_id not in grind_support_users:
+                limited_type_users.append(user_id)
+                continue
+            requirements = _quest_requirements.get((server_id, user_id))
+            type_remaining = (
+                [
+                    requirements["types"][quest_type]
+                    for quest_type in pokemon_types
+                    if quest_type in requirements["types"]
+                ]
+                if requirements
+                else []
+            )
+            if not type_remaining or any(remaining > 0 for remaining in type_remaining):
+                limited_type_users.append(user_id)
+                if requirements:
+                    for quest_type in pokemon_types:
+                        if requirements["types"].get(quest_type, 0) > 0:
+                            requirements["types"][quest_type] -= 1
+
+        limited_region_users = []
+        for user_id in region_ping_users:
+            if user_id not in grind_support_users:
+                limited_region_users.append(user_id)
+                continue
+            requirements = _quest_requirements.get((server_id, user_id))
+            region_remaining = (
+                [
+                    requirements["regions"][region]
+                    for region in pokemon_regions
+                    if region in requirements["regions"]
+                ]
+                if requirements
+                else []
+            )
+            if not region_remaining or any(remaining > 0 for remaining in region_remaining):
+                limited_region_users.append(user_id)
+                if requirements:
+                    for region in pokemon_regions:
+                        if requirements["regions"].get(region, 0) > 0:
+                            requirements["regions"][region] -= 1
+
+    return limited_type_users, limited_region_users
 
 
 async def get_grind_support_users(db_instance, server_id: int):
