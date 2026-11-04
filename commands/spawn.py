@@ -641,8 +641,18 @@ class SpawnPredictor(commands.Cog):
         ):
             return
 
+        if message.guild is None:
+            return
+
+        naming_enabled, shiny_hunt_prio = await get_server_spawn_settings(
+            message.guild.id,
+            db,
+        )
+        if not naming_enabled:
+            return
+
         grind_support_users = set()
-        if message.guild and message.guild.id in GRIND_SUPPORT_SERVER_IDS:
+        if message.guild.id in GRIND_SUPPORT_SERVER_IDS:
             try:
                 grind_support_users = await get_grind_support_users(
                     db,
@@ -669,13 +679,6 @@ class SpawnPredictor(commands.Cog):
             return
 
         try:
-            if message.guild is None:
-                return
-
-            naming_enabled, shiny_hunt_prio = await get_server_spawn_settings(
-                message.guild.id,
-                db,
-            )
             overall_start = time.perf_counter()
             image_url = message.embeds[0].image.url
 
