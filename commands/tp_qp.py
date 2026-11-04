@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from database import db
 from functions import (
+    GRIND_SUPPORT_SERVER_IDS,
     is_suspended,
     refresh_tp_qp_cache,
     set_quest_requirements,
@@ -439,6 +440,20 @@ class TypeRegionPings(commands.Cog):
                 "❌ I could not find any type or region quests in that message."
             )
 
+        grind_support_enabled = (
+            ctx.guild.id in GRIND_SUPPORT_SERVER_IDS
+            and await db.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM server_grind_support
+                    WHERE serverid = $1 AND userid = $2
+                )
+                """,
+                ctx.guild.id,
+                ctx.author.id,
+            )
+        )
         row = await db.fetchrow(
             """
             SELECT type_pings, region_pings
@@ -454,7 +469,11 @@ class TypeRegionPings(commands.Cog):
         active_regions = parse_user_enabled_keys(
             row["region_pings"] if row else None, "regions"
         )
-        added_types = sorted(new_types - active_types)
+        previous_types = set(active_types)
+        if grind_support_enabled:
+            active_types = set(new_types)
+        added_types = sorted(new_types - previous_types)
+        removed_types = sorted(previous_types - new_types)
         added_regions = sorted(new_regions - active_regions)
         active_types.update(new_types)
         active_regions.update(new_regions)
@@ -479,11 +498,16 @@ class TypeRegionPings(commands.Cog):
             ctx.author.id,
             type_requirements,
             region_requirements,
+            replace_types=grind_support_enabled,
         )
 
         added = []
         if added_types:
             added.append(f"types: {', '.join(name.capitalize() for name in added_types)}")
+        if removed_types:
+            added.append(
+                f"removed types: {', '.join(name.capitalize() for name in removed_types)}"
+            )
         if added_regions:
             added.append(
                 f"regions: {', '.join(name.capitalize() for name in added_regions)}"

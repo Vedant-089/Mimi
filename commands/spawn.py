@@ -800,6 +800,7 @@ class SpawnPredictor(commands.Cog):
             type_ping_users, region_ping_users = await limit_quest_ping_users(
                 message.guild.id,
                 grind_support_users,
+                db,
                 type_ping_users,
                 region_ping_users,
                 types,

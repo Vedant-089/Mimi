@@ -132,6 +132,14 @@ _quest_requirements = defaultdict(
     lambda: {"types": {}, "regions": {}}
 )
 _quest_requirements_lock = asyncio.Lock()
+with open("typing.json", "r", encoding="utf-8") as _typing_file:
+    _type_pokemon_names = {
+        type_name: {
+            pokemon_name.lower().strip()
+            for pokemon_name in pokemon_names
+        }
+        for type_name, pokemon_names in json.load(_typing_file).items()
+    }
 
 PING_TABLES_SQL = [
     """
@@ -591,12 +599,15 @@ async def set_quest_requirements(
     user_id: int,
     type_requirements: dict[str, int],
     region_requirements: dict[str, int],
+    replace_types: bool = False,
 ):
     if server_id not in GRIND_SUPPORT_SERVER_IDS:
         return
 
     async with _quest_requirements_lock:
         requirements = _quest_requirements[(server_id, user_id)]
+        if replace_types:
+            requirements["types"].clear()
         for quest_type, remaining in type_requirements.items():
             requirements["types"][quest_type] = max(0, remaining)
         for region, remaining in region_requirements.items():
@@ -606,6 +617,7 @@ async def set_quest_requirements(
 async def limit_quest_ping_users(
     server_id: int,
     grind_support_users: set[int],
+    db_instance,
     type_ping_users: list[int],
     region_ping_users: list[int],
     pokemon_types: list[str],
@@ -615,6 +627,7 @@ async def limit_quest_ping_users(
         return type_ping_users, region_ping_users
 
     async with _quest_requirements_lock:
+        completed_types = defaultdict(set)
         limited_type_users = []
         for user_id in type_ping_users:
             if user_id not in grind_support_users:
@@ -636,6 +649,8 @@ async def limit_quest_ping_users(
                     for quest_type in pokemon_types:
                         if requirements["types"].get(quest_type, 0) > 0:
                             requirements["types"][quest_type] -= 1
+                            if requirements["types"][quest_type] == 0:
+                                completed_types[user_id].add(quest_type)
 
         limited_region_users = []
         for user_id in region_ping_users:
@@ -658,6 +673,54 @@ async def limit_quest_ping_users(
                     for region in pokemon_regions:
                         if requirements["regions"].get(region, 0) > 0:
                             requirements["regions"][region] -= 1
+
+        changed_type_pings = False
+        for user_id, type_names in completed_types.items():
+            row = await db_instance.fetchrow(
+                """
+                SELECT type_pings
+                FROM tp_qp
+                WHERE serverid = $1 AND userid = $2
+                """,
+                server_id,
+                user_id,
+            )
+            if not row or not row["type_pings"]:
+                continue
+            try:
+                payload = json.loads(row["type_pings"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+
+            active_types = {
+                str(type_name).casefold()
+                for type_name in payload.get("types", [])
+            }
+            remaining_types = active_types - type_names
+            payload["types"] = sorted(remaining_types)
+            payload["pokemons"] = sorted(
+                {
+                    pokemon_name
+                    for type_name in remaining_types
+                    for pokemon_name in _type_pokemon_names.get(type_name, set())
+                }
+            )
+            await db_instance.execute(
+                """
+                UPDATE tp_qp
+                SET type_pings = $3
+                WHERE serverid = $1 AND userid = $2
+                """,
+                server_id,
+                user_id,
+                json.dumps(payload),
+            )
+            changed_type_pings = True
+
+        if changed_type_pings:
+            await refresh_tp_qp_cache(db_instance)
 
     return limited_type_users, limited_region_users
 
