@@ -100,6 +100,8 @@ _type_ping_cache = defaultdict(lambda: defaultdict(list))
 _region_ping_cache = defaultdict(lambda: defaultdict(list))
 _tp_qp_cache_last_updated = 0
 _tp_qp_cache_lock = asyncio.Lock()
+_server_settings_cache = {}
+_server_settings_cache_lock = asyncio.Lock()
 PING_TABLES_SQL = [
     """
     CREATE TABLE IF NOT EXISTS collection_pings (
@@ -222,17 +224,54 @@ async def get_server_spawn_settings(
     server_id: int,
     db_instance,
 ) -> tuple[bool, bool]:
-    row = await db_instance.fetchrow(
-        """
-        SELECT naming, shiny_hunt_prio
-        FROM server_settings
-        WHERE serverid = $1
-        """,
-        server_id,
-    )
-    if row is None:
-        return True, False
-    return bool(row["naming"]), bool(row["shiny_hunt_prio"])
+    cached = _server_settings_cache.get(server_id)
+    if cached is not None:
+        return cached
+
+    async with _server_settings_cache_lock:
+        cached = _server_settings_cache.get(server_id)
+        if cached is not None:
+            return cached
+
+        row = await db_instance.fetchrow(
+            """
+            SELECT naming, shiny_hunt_prio
+            FROM server_settings
+            WHERE serverid = $1
+            """,
+            server_id,
+        )
+        settings = (
+            (True, False)
+            if row is None
+            else (bool(row["naming"]), bool(row["shiny_hunt_prio"]))
+        )
+        _server_settings_cache[server_id] = settings
+        return settings
+
+
+async def refresh_server_settings_cache(db_instance):
+    async with _server_settings_cache_lock:
+        try:
+            rows = await db_instance.fetch(
+                "SELECT serverid, naming, shiny_hunt_prio FROM server_settings"
+            )
+            _server_settings_cache.clear()
+            _server_settings_cache.update(
+                {
+                    row["serverid"]: (
+                        bool(row["naming"]),
+                        bool(row["shiny_hunt_prio"]),
+                    )
+                    for row in rows
+                }
+            )
+        except Exception as e:
+            print("❌ Server Settings Cache Refresh Error:", e)
+
+
+def invalidate_server_settings_cache(server_id: int):
+    _server_settings_cache.pop(server_id, None)
 
 
 # Load forms.json and prepare mapping
@@ -532,6 +571,7 @@ async def warm_ping_caches(db_instance, server_ids=None):
         refresh_collection_cache(db_instance),
         refresh_reserve_cache(db_instance),
         refresh_tp_qp_cache(db_instance),
+        refresh_server_settings_cache(db_instance),
         warm_perk_cache(db_instance),
     )
 

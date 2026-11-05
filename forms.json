@@ -56,23 +56,23 @@
     "fairy arceus"
   ],
   "silvally": [
-    "bug silvally",
-    "dark silvally",
-    "dragon silvally",
-    "electric silvally",
-    "fairy silvally",
-    "fighting silvally",
-    "fire silvally",
-    "flying silvally",
-    "ghost silvally",
-    "grass silvally",
-    "ground silvally",
-    "ice silvally",
-    "poison silvally",
-    "psychic silvally",
-    "rock silvally",
-    "steel silvally",
-    "water silvally"
+    "silvally bug",
+    "silvally dark",
+    "silvally dragon",
+    "silvally electric",
+    "silvally fairy",
+    "silvally fighting",
+    "silvally fire",
+    "silvally flying",
+    "silvally ghost",
+    "silvally grass",
+    "silvally ground",
+    "silvally ice",
+    "silvally poison",
+    "silvally psychic",
+    "silvally rock",
+    "silvally steel",
+    "silvally water"
   ],
   "xerneas": [
     "neutral xerneas"
@@ -108,7 +108,7 @@
     "unown question"
   ],
   "pichu": [
-    "spiky-eared pichu"
+    "spikey eared pichu"
   ],
   "zigzagoon": [
     "galarian zigzagoon"
@@ -288,8 +288,7 @@
     "wash rotom",
     "rotom pokedex",
     "rotom phone",
-    "rotom drone",
-    "dj rotom"
+    "rotom drone"
   ],
   "oricorio": [
     "pom pom oricorio",
@@ -337,57 +336,9 @@
   "zarude": [
     "dada zarude"
   ],
-  "morpeko": [
-    "hangry morpeko"
-  ],
-  "eiscue": [
-    "noice face eiscue"
-  ],
-  "amped toxtricity": [
-    "low key toxtricity"
-  ],
-  "pikachu": [
-    "peakychu"
-  ],
-  "tangrowth": [
-    "prof tangrowth"
-  ],
-  "smeargle": [
-    "smearguru"
-  ],
-  "snorlax": [
-    "mosslax"
-  ],
-  "greedent": [
-    "chef dente"
-  ],
-  "basculin": [
-    "white-striped basculin",
-    "blue-striped basculin"
-  ],
-  "marshadow": [
-    "zenith marshadow"
-  ],
-  "deerling": [
-    "spring deerling",
-    "summer deerling",
-    "autumn deerling",
-    "winter deerling"
-  ],
-  "Meowscarada": [
-    "Oracle Meowscarada",
-    "Witch Meowscarada"
-  ],
-  "applin": [
-    "enchanted applin",
-    "rotten applin"
-  ],
-  "reuniclus": [
-    "Elixir Reuniclus",
-    "Cauldron Reuniclus"
-  ],
-  "simipour": [
-    "medusa simipour",
-    "statue simipour"
+  "cyclizar": [
+    "ride cyclizar",
+    "battle cyclizar"
   ]
+
 }

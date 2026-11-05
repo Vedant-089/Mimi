@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 
 from database import db
+from functions import invalidate_server_settings_cache
 
 
 async def get_server_settings(server_id: int):
@@ -208,6 +209,7 @@ class NamingSettingsView(discord.ui.LayoutView):
             self.naming_enabled,
             self.server_id,
         )
+        invalidate_server_settings_cache(self.server_id)
         self._build_layout()
         await interaction.response.edit_message(view=self)
 
@@ -220,6 +222,7 @@ class NamingSettingsView(discord.ui.LayoutView):
             self.shiny_hunt_prio,
             self.server_id,
         )
+        invalidate_server_settings_cache(self.server_id)
         self._build_layout()
         await interaction.response.edit_message(view=self)
 
