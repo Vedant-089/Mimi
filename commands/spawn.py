@@ -25,7 +25,6 @@ from functions import (
     get_users_type_ping,
     get_users_region_ping,
     get_server_spawn_settings,
-    is_only_ping_enabled,
     update_and_check_incense,
     parse_incense_footer,
     warm_ping_caches,
@@ -727,11 +726,6 @@ class SpawnPredictor(commands.Cog):
             display_name = name[:1].upper() + name[1:]
 
             if confidence < CONF_THRESHOLD:
-                await message.channel.send(
-                    "❌ Not confident enough to guess this Pokémon. "
-                    "<@1397199191792685056>"
-                )
-
                 return
 
             total_ms = (
@@ -782,7 +776,7 @@ class SpawnPredictor(commands.Cog):
                 )
             )
 
-            if is_only_ping_enabled() and not (
+            if not (
                 hunters
                 or collectors
                 or reserves
