@@ -49,7 +49,7 @@ HELP_PAGES_DATA = [
         "description": (
             "• `m!tp` - Opens the interactive Type Pings embed with one button per type. Use `m!tp <types>` to add types or `m!tp remove <types>` to remove them.\n"
             "• `m!rp` (`m!qp`) - Opens the interactive Region Pings embed with one button per region. Use `m!qp <regions>` to add regions or `m!qp remove <regions>` to remove them.\n"
-            "• `m!event` (`m!ev`) - Reply to a Pokétwo Quests embed to add its type and region quests to your pings. In grind-support servers, `m!gs true` also limits those pings to the remaining quest counts."
+            "• `m!event` (`m!ev`) - Reply to a Pokétwo Quests embed to add its type and region quests to your pings."
         ),
     },
     {

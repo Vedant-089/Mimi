@@ -24,23 +24,14 @@ from functions import (
     get_users_reserved,
     get_users_type_ping,
     get_users_region_ping,
-    get_grind_support_users,
-    GRIND_SUPPORT_SERVER_IDS,
-    limit_quest_ping_users,
     get_server_spawn_settings,
     is_only_ping_enabled,
-    set_poketwo_send_permission,
     update_and_check_incense,
     parse_incense_footer,
     warm_ping_caches,
 )
 
 POKETWO_BOT_ID = 716390085896962058
-TYPE_CHANNEL_SYNC_GUILD_IDS = {
-    1322103302888095837,
-    1429413142319988788,
-    1429413395769065614,
-}
 MODEL_PATH = "pokemon_halloween_int8.onnx"
 IMG_SIZE = 224
 CONF_THRESHOLD = 0.30  # 30%
@@ -651,30 +642,6 @@ class SpawnPredictor(commands.Cog):
         if not naming_enabled:
             return
 
-        grind_support_users = set()
-        if message.guild.id in GRIND_SUPPORT_SERVER_IDS:
-            try:
-                grind_support_users = await get_grind_support_users(
-                    db,
-                    message.guild.id,
-                )
-            except Exception as error:
-                print(
-                    f"⚠️ Failed to check grind support before spawn in "
-                    f"{message.guild.id}/{message.channel.id}: {error}"
-                )
-            try:
-                await set_poketwo_send_permission(
-                    message.guild,
-                    message.channel,
-                    False,
-                )
-            except Exception as error:
-                print(
-                    f"⚠️ Failed to pause Pokétwo before spawn in "
-                    f"{message.guild.id}/{message.channel.id}: {error}"
-                )
-
         if not self.is_recognition_enabled():
             return
 
@@ -800,15 +767,6 @@ class SpawnPredictor(commands.Cog):
 
             types = self.get_pokemon_types(name)
             regions = self.get_pokemon_regions(name)
-            type_ping_users, region_ping_users = await limit_quest_ping_users(
-                message.guild.id,
-                grind_support_users,
-                db,
-                type_ping_users,
-                region_ping_users,
-                types,
-                regions,
-            )
             rares = self.get_rare_flags(name)
             regionals = self.get_regional_flags(name)
 
@@ -823,22 +781,6 @@ class SpawnPredictor(commands.Cog):
                     name
                 )
             )
-
-            if (
-                (types or regions)
-                and self.is_type_enabled()
-                and message.guild
-                and message.guild.id in TYPE_CHANNEL_SYNC_GUILD_IDS
-            ):
-                type_sync_task = asyncio.create_task(
-                    self.sync_type_channel_data(
-                        message.channel.id,
-                        types + regions,
-                    )
-                )
-                type_sync_task.add_done_callback(
-                    self._log_background_task_exception
-                )
 
             if is_only_ping_enabled() and not (
                 hunters
