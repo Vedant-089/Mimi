@@ -16,6 +16,26 @@ GRIND_SUPPORT_SERVER_IDS = frozenset({
 
 _poketwo_permission_cache = {}
 _poketwo_permission_locks = defaultdict(asyncio.Lock)
+_poketwo_member_cache = {}
+_poketwo_member_locks = defaultdict(asyncio.Lock)
+
+
+async def _get_poketwo_member(guild):
+    member = _poketwo_member_cache.get(guild.id) or guild.get_member(
+        POKETWO_BOT_ID
+    )
+    if member is not None:
+        _poketwo_member_cache[guild.id] = member
+        return member
+
+    async with _poketwo_member_locks[guild.id]:
+        member = _poketwo_member_cache.get(guild.id) or guild.get_member(
+            POKETWO_BOT_ID
+        )
+        if member is None:
+            member = await guild.fetch_member(POKETWO_BOT_ID)
+        _poketwo_member_cache[guild.id] = member
+        return member
 
 
 async def set_poketwo_send_permission(
@@ -38,9 +58,7 @@ async def set_poketwo_send_permission(
         if not force and allowed is False and _poketwo_permission_cache.get(cache_key) is False:
             return False
 
-        poketwo = guild.get_member(POKETWO_BOT_ID)
-        if poketwo is None:
-            poketwo = await guild.fetch_member(POKETWO_BOT_ID)
+        poketwo = await _get_poketwo_member(guild)
 
         await channel.set_permissions(
             poketwo,
