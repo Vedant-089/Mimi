@@ -112,13 +112,13 @@ class SpawnPredictor(commands.Cog):
             name = self.idx_to_name[top_idx]
 
             if confidence < CONF_THRESHOLD:
-                await message.channel.send(
-                    "❌ Not confident enough to guess this Pokémon."
-                )
                 return
 
             hunters = await get_users_hunting(name, db)
             collectors = await get_users_collecting(name, message.guild.id, db)
+
+            if not hunters and not collectors:
+                return
 
             types = self.get_pokemon_types(name)
             regions = self.get_pokemon_regions(name)
