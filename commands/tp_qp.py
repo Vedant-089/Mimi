@@ -56,74 +56,134 @@ def parse_user_enabled_keys(raw_data, key_name):
     return set()
 
 
-def parse_quest_pings(message: discord.Message):
-    """Extract type and region names and remaining counts from a quest message."""
-    def collect_strings(value):
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, dict):
-            return [
-                string
-                for item in value.values()
-                for string in collect_strings(item)
-            ]
-        if isinstance(value, (list, tuple)):
-            return [
-                string
-                for item in value
-                for string in collect_strings(item)
-            ]
-        return []
+def _normalize_quest_text(value: str) -> str:
+    """Normalize Unicode spacing/dashes without destroying line boundaries."""
+    value = value.casefold()
+    value = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", value)
+    value = re.sub(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]", "-", value)
+    value = re.sub(r"[\u00a0\t\f\v]+", " ", value)
+    return value
 
+
+def _collect_embed_text(embed) -> list[str]:
+    """Read the user-visible text from a discord.py Embed or embed-like object."""
+    parts = []
+
+    # Read explicit attributes first. This avoids relying on the exact shape of
+    # Embed.to_dict() and ensures description/field values are not missed.
+    for attr in ("title", "description", "url"):
+        value = getattr(embed, attr, None)
+        if isinstance(value, str) and value:
+            parts.append(value)
+
+    for attr in ("author", "footer"):
+        nested = getattr(embed, attr, None)
+        if nested is not None:
+            value = getattr(nested, "name", None) or getattr(nested, "text", None)
+            if isinstance(value, str) and value:
+                parts.append(value)
+
+    for field in getattr(embed, "fields", []) or []:
+        name = getattr(field, "name", None)
+        value = getattr(field, "value", None)
+        if isinstance(name, str) and name:
+            parts.append(name)
+        if isinstance(value, str) and value:
+            parts.append(value)
+
+    # Also support raw dicts and discord.py versions/objects exposing to_dict.
+    try:
+        raw = embed.to_dict() if hasattr(embed, "to_dict") else embed
+        if isinstance(raw, dict):
+            def walk(item):
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    for child in item.values():
+                        walk(child)
+                elif isinstance(item, (list, tuple)):
+                    for child in item:
+                        walk(child)
+            walk(raw)
+    except Exception:
+        LOGGER.exception("Failed to serialize an embed while parsing quest text")
+
+    # Preserve order while removing duplicate values.
+    return list(dict.fromkeys(part for part in parts if part))
+
+
+def _quest_name_pattern(names, suffix: str) -> list[tuple[str, re.Pattern]]:
+    """Build one safe regex per canonical mapping key.
+
+    Some mapping files store keys as 'Flying', while others may store
+    'Flying-type'. Both should match the visible quest phrase 'Flying-type'.
+    """
+    compiled = []
+    for canonical in names:
+        base = str(canonical).strip()
+        if not base or base == "???":
+            continue
+        if suffix == "type":
+            base = re.sub(r"\s*-?\s*type$", "", base, flags=re.IGNORECASE).strip()
+            if not base:
+                continue
+            pattern = re.compile(
+                rf"(?<!\w){re.escape(_normalize_quest_text(base))}"
+                rf"\s*-\s*type(?!\w)|(?<!\w){re.escape(_normalize_quest_text(base))}"
+                rf"\s+type(?!\w)",
+                re.IGNORECASE,
+            )
+        else:
+            pattern = re.compile(
+                rf"(?<!\w){re.escape(_normalize_quest_text(base))}\s+region(?!\w)",
+                re.IGNORECASE,
+            )
+        compiled.append((canonical, pattern))
+    return compiled
+
+
+def parse_quest_pings(message: discord.Message):
+    """Extract type/region quests and remaining counts from a Discord message."""
     text_parts = []
     seen_parts = set()
 
     def add_text(value):
-        if not isinstance(value, str) or not value or value in seen_parts:
-            return
-        seen_parts.add(value)
-        text_parts.append(value)
+        if isinstance(value, str) and value and value not in seen_parts:
+            seen_parts.add(value)
+            text_parts.append(value)
 
-    def embed_strings(embed):
-        if hasattr(embed, "to_dict"):
-            return collect_strings(embed.to_dict())
-        values = []
-        for attribute in ("title", "description", "url"):
-            values.extend(collect_strings(getattr(embed, attribute, None)))
-        for attribute in ("author", "footer"):
-            nested = getattr(embed, attribute, None)
-            if nested is not None:
-                values.extend(collect_strings(vars(nested)))
-        for field in getattr(embed, "fields", []) or []:
-            values.extend(collect_strings(vars(field)))
-        return values
-
+    # Message content is usually empty for Pokétwo embeds, but include it.
     add_text(getattr(message, "content", None))
-    messages = [message]
-    messages.extend(getattr(message, "message_snapshots", []) or [])
-    for source_message in messages:
+
+    source_messages = [message]
+    snapshots = getattr(message, "message_snapshots", None) or []
+    source_messages.extend(snapshots)
+
+    for source_message in source_messages:
         add_text(getattr(source_message, "content", None))
-        if source_message is message and hasattr(source_message, "to_dict"):
-            for value in collect_strings(source_message.to_dict()):
-                add_text(value)
         for embed in getattr(source_message, "embeds", []) or []:
-            for value in embed_strings(embed):
-                add_text(value)
+            for part in _collect_embed_text(embed):
+                add_text(part)
 
-    text = "\n".join(text_parts).casefold()
-    text = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", text)
-    text = re.sub(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]", "-", text)
-    text = re.sub(r"[\u00a0 \t\f\v]+", " ", text)
+        # Some discord.py MessageSnapshot representations expose raw embed data.
+        raw_embeds = getattr(source_message, "embeds", None)
+        if not raw_embeds and hasattr(source_message, "to_dict"):
+            try:
+                raw_message = source_message.to_dict()
+                for raw_embed in raw_message.get("embeds", []) or []:
+                    for part in _collect_embed_text(raw_embed):
+                        add_text(part)
+            except Exception:
+                LOGGER.exception("Failed to read raw message snapshot embeds")
 
-    type_pattern = "|".join(
-        re.escape(ping_type) for ping_type in sorted(ALL_TYPES, key=len, reverse=True)
-    )
-    region_pattern = "|".join(
-        re.escape(region) for region in sorted(ALL_REGIONS, key=len, reverse=True)
-    )
+    text = _normalize_quest_text("\n".join(text_parts))
+    text = re.sub(r"[ ]{2,}", " ", text)
 
-    types = set()
-    regions = set()
+    type_patterns = _quest_name_pattern(ALL_TYPES, "type")
+    region_patterns = _quest_name_pattern(ALL_REGIONS, "region")
+
+    found_types = set()
+    found_regions = set()
     type_requirements = {}
     region_requirements = {}
 
@@ -131,52 +191,55 @@ def parse_quest_pings(message: discord.Message):
         progress_match = re.search(r"\((\d+)\s*/\s*(\d+)\)", line)
         remaining = None
         if progress_match:
-            remaining = max(
-                0,
-                int(progress_match.group(2)) - int(progress_match.group(1)),
-            )
+            completed = int(progress_match.group(1))
+            total = int(progress_match.group(2))
+            remaining = max(0, total - completed)
 
         line_types = {
-            TYPE_KEYS_BY_CASEFOLD[match.casefold()]
-            for match in re.findall(
-                rf"\b({type_pattern})(?:\s*-\s*|\s+)type\b",
-                line,
-                re.IGNORECASE,
-            )
+            canonical for canonical, pattern in type_patterns if pattern.search(line)
         }
         line_regions = {
-            REGION_KEYS_BY_CASEFOLD[match.casefold()]
-            for match in re.findall(
-                rf"\b({region_pattern})\s+region\b",
-                line,
-                re.IGNORECASE,
-            )
+            canonical for canonical, pattern in region_patterns if pattern.search(line)
         }
-        types.update(line_types)
-        regions.update(line_regions)
+
+        found_types.update(line_types)
+        found_regions.update(line_regions)
+
         if remaining is not None:
             for quest_type in line_types:
                 type_requirements[quest_type] = max(
-                    remaining,
-                    type_requirements.get(quest_type, 0),
+                    remaining, type_requirements.get(quest_type, 0)
                 )
             for region in line_regions:
                 region_requirements[region] = max(
-                    remaining,
-                    region_requirements.get(region, 0),
+                    remaining, region_requirements.get(region, 0)
                 )
 
-    LOGGER.debug(
-        "Parsed quest message: text_parts=%d extracted_text=%r types=%s regions=%s "
-        "type_requirements=%s region_requirements=%s",
-        len(text_parts),
-        text,
-        sorted(types),
-        sorted(regions),
-        type_requirements,
-        region_requirements,
-    )
-    return types, regions, type_requirements, region_requirements
+    if not found_types and not found_regions:
+        LOGGER.warning(
+            "Quest parser found no type/region quests. message_id=%s author_id=%s "
+            "embed_count=%s text_parts=%s extracted_text=%r available_types=%s "
+            "available_regions=%s",
+            getattr(message, "id", None),
+            getattr(getattr(message, "author", None), "id", None),
+            len(getattr(message, "embeds", []) or []),
+            len(text_parts),
+            text[:12000],
+            ALL_TYPES,
+            ALL_REGIONS,
+        )
+    else:
+        LOGGER.info(
+            "Quest parser success. message_id=%s types=%s regions=%s "
+            "type_requirements=%s region_requirements=%s",
+            getattr(message, "id", None),
+            sorted(found_types),
+            sorted(found_regions),
+            type_requirements,
+            region_requirements,
+        )
+
+    return found_types, found_regions, type_requirements, region_requirements
 
 
 def build_ping_payload(names, key_name, pokemon_resolver):
@@ -520,8 +583,16 @@ class TypeRegionPings(commands.Cog):
             region_requirements,
         ) = parse_quest_pings(replied_message)
         if not new_types and not new_regions:
+            LOGGER.warning(
+                "m!ev parse returned no matches. replied_message_id=%s embeds=%d "
+                "content_length=%d. Check the 'Quest parser found no...' log above.",
+                getattr(replied_message, "id", None),
+                len(getattr(replied_message, "embeds", []) or []),
+                len(getattr(replied_message, "content", None) or ""),
+            )
             return await ctx.send(
-                "❌ I could not find any type or region quests in that message."
+                "❌ I could not find any type or region quests in that message. "
+                "Check Mimi's logs for quest-parser diagnostics."
             )
 
         grind_support_enabled = (
