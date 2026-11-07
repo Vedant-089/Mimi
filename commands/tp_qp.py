@@ -112,6 +112,24 @@ def _collect_embed_text(embed) -> list[str]:
     return list(dict.fromkeys(part for part in parts if part))
 
 
+def _collect_nested_strings(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            part
+            for child in value.values()
+            for part in _collect_nested_strings(child)
+        ]
+    if isinstance(value, (list, tuple)):
+        return [
+            part
+            for child in value
+            for part in _collect_nested_strings(child)
+        ]
+    return []
+
+
 def _quest_name_pattern(names, suffix: str) -> list[tuple[str, re.Pattern]]:
     """Build one safe regex per canonical mapping key.
 
@@ -161,20 +179,26 @@ def parse_quest_pings(message: discord.Message):
 
     for source_message in source_messages:
         add_text(getattr(source_message, "content", None))
+        for component in getattr(source_message, "components", []) or []:
+            for part in _collect_nested_strings(
+                component.to_dict() if hasattr(component, "to_dict") else vars(component)
+            ):
+                add_text(part)
         for embed in getattr(source_message, "embeds", []) or []:
             for part in _collect_embed_text(embed):
                 add_text(part)
 
-        # Some discord.py MessageSnapshot representations expose raw embed data.
-        raw_embeds = getattr(source_message, "embeds", None)
-        if not raw_embeds and hasattr(source_message, "to_dict"):
+        # Newer Discord message payloads can carry visible text in components
+        # without an Embed object.
+        if hasattr(source_message, "to_dict"):
             try:
                 raw_message = source_message.to_dict()
-                for raw_embed in raw_message.get("embeds", []) or []:
-                    for part in _collect_embed_text(raw_embed):
-                        add_text(part)
+                for part in _collect_nested_strings(
+                    raw_message.get("components", [])
+                ):
+                    add_text(part)
             except Exception:
-                LOGGER.exception("Failed to read raw message snapshot embeds")
+                LOGGER.exception("Failed to read raw message components")
 
     text = _normalize_quest_text("\n".join(text_parts))
     text = re.sub(r"[ ]{2,}", " ", text)
@@ -568,9 +592,12 @@ class TypeRegionPings(commands.Cog):
             if not isinstance(replied_message, discord.Message):
                 replied_message = await ctx.channel.fetch_message(reference.message_id)
             LOGGER.debug(
-                "Retrieved replied message id=%s embeds=%d content_length=%d",
+                "Retrieved replied message id=%s embeds=%d components=%d "
+                "snapshots=%d content_length=%d",
                 replied_message.id,
                 len(replied_message.embeds),
+                len(getattr(replied_message, "components", []) or []),
+                len(getattr(replied_message, "message_snapshots", []) or []),
                 len(replied_message.content or ""),
             )
         except discord.HTTPException:

@@ -81,6 +81,40 @@ def test_parse_embed_fields_and_case_insensitive_names():
     assert region_requirements == {"galar": 3}
 
 
+def test_parse_component_backed_message_without_embeds():
+    message = SimpleNamespace(
+        content="",
+        embeds=[],
+        message_snapshots=[],
+        components=[
+            SimpleNamespace(
+                to_dict=lambda: {
+                    "type": 1,
+                    "components": [
+                        {
+                            "label": "B1. Catch 18 Flying-type pokemon (1/18)",
+                        },
+                        {
+                            "label": (
+                                "D1. Catch 14 pokemon from the Galar region (0/14)"
+                            ),
+                        },
+                    ],
+                }
+            )
+        ],
+    )
+
+    types, regions, type_requirements, region_requirements = parse_quest_pings(
+        message
+    )
+
+    assert types == {"flying"}
+    assert regions == {"galar"}
+    assert type_requirements == {"flying": 17}
+    assert region_requirements == {"galar": 14}
+
+
 def test_ping_payload_resolves_canonical_keys():
     type_payload = build_ping_payload({"flying"}, "types", get_pokemons_for_types)
     region_payload = build_ping_payload({"galar"}, "regions", get_pokemons_for_regions)
