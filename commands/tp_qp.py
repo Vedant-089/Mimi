@@ -51,6 +51,23 @@ def parse_user_enabled_keys(raw_data, key_name):
 
 def parse_quest_pings(message: discord.Message):
     """Extract type and region names and remaining counts from a quest message."""
+    def collect_strings(value):
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, dict):
+            return [
+                string
+                for item in value.values()
+                for string in collect_strings(item)
+            ]
+        if isinstance(value, (list, tuple)):
+            return [
+                string
+                for item in value
+                for string in collect_strings(item)
+            ]
+        return []
+
     text_parts = [message.content or ""]
     messages = [message]
     messages.extend(getattr(message, "message_snapshots", []) or [])
@@ -59,21 +76,10 @@ def parse_quest_pings(message: discord.Message):
         if source_message is not message and source_content:
             text_parts.append(source_content)
         for embed in getattr(source_message, "embeds", []) or []:
-            embed_data = embed.to_dict() if hasattr(embed, "to_dict") else {}
-            text_parts.extend(
-                value
-                for value in (
-                    embed_data.get("title"),
-                    embed_data.get("description"),
-                    embed_data.get("footer", {}).get("text"),
-                    embed_data.get("author", {}).get("name"),
-                )
-                if isinstance(value, str)
-            )
-            text_parts.extend(
-                f"{field.get('name', '')}\n{field.get('value', '')}"
-                for field in embed_data.get("fields", [])
-            )
+            if hasattr(embed, "to_dict"):
+                text_parts.extend(collect_strings(embed.to_dict()))
+            else:
+                text_parts.extend(collect_strings(vars(embed)))
     text = "\n".join(text_parts).casefold()
     text = re.sub(r"[\u200b\ufeff]", "", text)
     text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
@@ -441,7 +447,9 @@ class TypeRegionPings(commands.Cog):
             return await ctx.send("❌ Reply to a message containing quest descriptions.")
 
         try:
-            replied_message = await ctx.channel.fetch_message(reference.message_id)
+            replied_message = reference.resolved
+            if not isinstance(replied_message, discord.Message):
+                replied_message = await ctx.channel.fetch_message(reference.message_id)
         except discord.HTTPException:
             return await ctx.send("❌ I could not read the replied-to message.")
 
