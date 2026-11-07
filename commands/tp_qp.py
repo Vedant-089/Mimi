@@ -69,6 +69,8 @@ def parse_quest_pings(message: discord.Message):
         return []
 
     text_parts = [message.content or ""]
+    if hasattr(message, "to_dict"):
+        text_parts.extend(collect_strings(message.to_dict()))
     messages = [message]
     messages.extend(getattr(message, "message_snapshots", []) or [])
     for source_message in messages:
@@ -81,9 +83,9 @@ def parse_quest_pings(message: discord.Message):
             else:
                 text_parts.extend(collect_strings(vars(embed)))
     text = "\n".join(text_parts).casefold()
-    text = re.sub(r"[\u200b\ufeff]", "", text)
-    text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
-    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", text)
+    text = re.sub(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]", "-", text)
+    text = re.sub(r"[\u00a0 \t\f\v]+", " ", text)
 
     type_pattern = "|".join(
         re.escape(ping_type) for ping_type in sorted(ALL_TYPES, key=len, reverse=True)
@@ -106,7 +108,9 @@ def parse_quest_pings(message: discord.Message):
                 int(progress_match.group(2)) - int(progress_match.group(1)),
             )
 
-        line_types = set(re.findall(rf"\b({type_pattern})\s*-\s*type\b", line))
+        line_types = set(
+            re.findall(rf"\b({type_pattern})\s*(?:-\s*)?type\b", line)
+        )
         line_regions = set(re.findall(rf"\b({region_pattern})\s+region\b", line))
         types.update(line_types)
         regions.update(line_regions)
