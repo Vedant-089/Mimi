@@ -52,23 +52,32 @@ def parse_user_enabled_keys(raw_data, key_name):
 def parse_quest_pings(message: discord.Message):
     """Extract type and region names and remaining counts from a quest message."""
     text_parts = [message.content or ""]
-    for snapshot in getattr(message, "message_snapshots", []) or []:
-        snapshot_content = getattr(snapshot, "content", None)
-        if snapshot_content:
-            text_parts.append(snapshot_content)
-
-    for embed in message.embeds:
-        text_parts.extend([
-            embed.title or "",
-            embed.description or "",
-            embed.author.name if embed.author else "",
-            embed.footer.text if embed.footer else "",
-        ])
-        text_parts.extend(
-            f"{field.name}\n{field.value}" for field in embed.fields
-        )
+    messages = [message]
+    messages.extend(getattr(message, "message_snapshots", []) or [])
+    for source_message in messages:
+        source_content = getattr(source_message, "content", None)
+        if source_message is not message and source_content:
+            text_parts.append(source_content)
+        for embed in getattr(source_message, "embeds", []) or []:
+            embed_data = embed.to_dict() if hasattr(embed, "to_dict") else {}
+            text_parts.extend(
+                value
+                for value in (
+                    embed_data.get("title"),
+                    embed_data.get("description"),
+                    embed_data.get("footer", {}).get("text"),
+                    embed_data.get("author", {}).get("name"),
+                )
+                if isinstance(value, str)
+            )
+            text_parts.extend(
+                f"{field.get('name', '')}\n{field.get('value', '')}"
+                for field in embed_data.get("fields", [])
+            )
     text = "\n".join(text_parts).casefold()
+    text = re.sub(r"[\u200b\ufeff]", "", text)
     text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
+    text = re.sub(r"[ \t]+", " ", text)
 
     type_pattern = "|".join(
         re.escape(ping_type) for ping_type in sorted(ALL_TYPES, key=len, reverse=True)
