@@ -52,16 +52,23 @@ def parse_user_enabled_keys(raw_data, key_name):
 def parse_quest_pings(message: discord.Message):
     """Extract type and region names and remaining counts from a quest message."""
     text_parts = [message.content or ""]
+    for snapshot in getattr(message, "message_snapshots", []) or []:
+        snapshot_content = getattr(snapshot, "content", None)
+        if snapshot_content:
+            text_parts.append(snapshot_content)
+
     for embed in message.embeds:
         text_parts.extend([
             embed.title or "",
             embed.description or "",
             embed.author.name if embed.author else "",
+            embed.footer.text if embed.footer else "",
         ])
         text_parts.extend(
             f"{field.name}\n{field.value}" for field in embed.fields
         )
     text = "\n".join(text_parts).casefold()
+    text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
 
     type_pattern = "|".join(
         re.escape(ping_type) for ping_type in sorted(ALL_TYPES, key=len, reverse=True)
@@ -84,7 +91,7 @@ def parse_quest_pings(message: discord.Message):
                 int(progress_match.group(2)) - int(progress_match.group(1)),
             )
 
-        line_types = set(re.findall(rf"\b({type_pattern})-type\b", line))
+        line_types = set(re.findall(rf"\b({type_pattern})\s*-\s*type\b", line))
         line_regions = set(re.findall(rf"\b({region_pattern})\s+region\b", line))
         types.update(line_types)
         regions.update(line_regions)
