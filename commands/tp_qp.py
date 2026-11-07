@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import discord
 from discord.ext import commands
@@ -10,6 +11,8 @@ from functions import (
     set_quest_requirements,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 # Load type and region JSON mappings
 with open("typing.json", "r", encoding="utf-8") as f:
     TYPING_DATA = json.load(f)
@@ -19,6 +22,10 @@ with open("region.json", "r", encoding="utf-8") as f:
 
 ALL_TYPES = [t for t in TYPING_DATA.keys() if t != "???"]
 ALL_REGIONS = [r for r in REGION_DATA.keys() if r != "???"]
+TYPE_KEYS_BY_CASEFOLD = {name.casefold(): name for name in ALL_TYPES}
+REGION_KEYS_BY_CASEFOLD = {name.casefold(): name for name in ALL_REGIONS}
+
+
 def get_pokemons_for_types(selected_types):
     pokes = set()
     for t in selected_types:
@@ -68,20 +75,41 @@ def parse_quest_pings(message: discord.Message):
             ]
         return []
 
-    text_parts = [message.content or ""]
-    if hasattr(message, "to_dict"):
-        text_parts.extend(collect_strings(message.to_dict()))
+    text_parts = []
+    seen_parts = set()
+
+    def add_text(value):
+        if not isinstance(value, str) or not value or value in seen_parts:
+            return
+        seen_parts.add(value)
+        text_parts.append(value)
+
+    def embed_strings(embed):
+        if hasattr(embed, "to_dict"):
+            return collect_strings(embed.to_dict())
+        values = []
+        for attribute in ("title", "description", "url"):
+            values.extend(collect_strings(getattr(embed, attribute, None)))
+        for attribute in ("author", "footer"):
+            nested = getattr(embed, attribute, None)
+            if nested is not None:
+                values.extend(collect_strings(vars(nested)))
+        for field in getattr(embed, "fields", []) or []:
+            values.extend(collect_strings(vars(field)))
+        return values
+
+    add_text(getattr(message, "content", None))
     messages = [message]
     messages.extend(getattr(message, "message_snapshots", []) or [])
     for source_message in messages:
-        source_content = getattr(source_message, "content", None)
-        if source_message is not message and source_content:
-            text_parts.append(source_content)
+        add_text(getattr(source_message, "content", None))
+        if source_message is message and hasattr(source_message, "to_dict"):
+            for value in collect_strings(source_message.to_dict()):
+                add_text(value)
         for embed in getattr(source_message, "embeds", []) or []:
-            if hasattr(embed, "to_dict"):
-                text_parts.extend(collect_strings(embed.to_dict()))
-            else:
-                text_parts.extend(collect_strings(vars(embed)))
+            for value in embed_strings(embed):
+                add_text(value)
+
     text = "\n".join(text_parts).casefold()
     text = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", text)
     text = re.sub(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]", "-", text)
@@ -108,10 +136,22 @@ def parse_quest_pings(message: discord.Message):
                 int(progress_match.group(2)) - int(progress_match.group(1)),
             )
 
-        line_types = set(
-            re.findall(rf"\b({type_pattern})\s*(?:-\s*)?type\b", line)
-        )
-        line_regions = set(re.findall(rf"\b({region_pattern})\s+region\b", line))
+        line_types = {
+            TYPE_KEYS_BY_CASEFOLD[match.casefold()]
+            for match in re.findall(
+                rf"\b({type_pattern})(?:\s*-\s*|\s+)type\b",
+                line,
+                re.IGNORECASE,
+            )
+        }
+        line_regions = {
+            REGION_KEYS_BY_CASEFOLD[match.casefold()]
+            for match in re.findall(
+                rf"\b({region_pattern})\s+region\b",
+                line,
+                re.IGNORECASE,
+            )
+        }
         types.update(line_types)
         regions.update(line_regions)
         if remaining is not None:
@@ -126,6 +166,16 @@ def parse_quest_pings(message: discord.Message):
                     region_requirements.get(region, 0),
                 )
 
+    LOGGER.debug(
+        "Parsed quest message: text_parts=%d extracted_text=%r types=%s regions=%s "
+        "type_requirements=%s region_requirements=%s",
+        len(text_parts),
+        text,
+        sorted(types),
+        sorted(regions),
+        type_requirements,
+        region_requirements,
+    )
     return types, regions, type_requirements, region_requirements
 
 
@@ -454,6 +504,12 @@ class TypeRegionPings(commands.Cog):
             replied_message = reference.resolved
             if not isinstance(replied_message, discord.Message):
                 replied_message = await ctx.channel.fetch_message(reference.message_id)
+            LOGGER.debug(
+                "Retrieved replied message id=%s embeds=%d content_length=%d",
+                replied_message.id,
+                len(replied_message.embeds),
+                len(replied_message.content or ""),
+            )
         except discord.HTTPException:
             return await ctx.send("❌ I could not read the replied-to message.")
 
