@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import asyncio
+import csv
 import os
 from copy import deepcopy
 import discord
@@ -26,6 +27,50 @@ with open("typing.json", "r", encoding="utf-8") as f:
 
 with open("region.json", "r", encoding="utf-8") as f:
     REGION_DATA = json.load(f)
+
+with open("rare.json", "r", encoding="utf-8") as f:
+    RARE_POKEMON = {
+        name.casefold().strip()
+        for names in json.load(f).values()
+        for name in names
+    }
+
+with open("regional.json", "r", encoding="utf-8") as f:
+    REGIONAL_POKEMON = {
+        name.casefold().strip()
+        for names in json.load(f).values()
+        for name in names
+    }
+
+with open("gigantamax.json", "r", encoding="utf-8") as f:
+    GIGANTAMAX_POKEMON = {
+        name.casefold().strip()
+        for names in json.load(f).values()
+        for name in names
+    }
+
+with open("eeveelutions_paradox.json", "r", encoding="utf-8") as f:
+    _EEVEELUTIONS_PARADOX_DATA = json.load(f)
+PARADOX_POKEMON = {
+    name.casefold().strip()
+    for name in _EEVEELUTIONS_PARADOX_DATA.get("paradox", [])
+}
+
+with open("pokemon.csv", "r", encoding="utf-8-sig", newline="") as f:
+    UNKNOWN_GENDER_POKEMON = {
+        row["name.en"].casefold().strip()
+        for row in csv.DictReader(f)
+        if row.get("gender_rate") == "-1"
+        and row.get("enabled") == "1"
+        and row.get("catchable") == "1"
+        and row.get("name.en")
+        and row["name.en"].casefold().strip() not in (
+            RARE_POKEMON
+            | REGIONAL_POKEMON
+            | GIGANTAMAX_POKEMON
+            | PARADOX_POKEMON
+        )
+    }
 
 ALL_TYPES = [t for t in TYPING_DATA.keys() if t != "???"]
 ALL_REGIONS = [r for r in REGION_DATA.keys() if r != "???"]
@@ -304,6 +349,15 @@ def parse_event_quests(message: discord.Message) -> tuple[list[dict], list[str]]
         line_regions = [name for name, pattern in region_patterns if pattern.search(line)]
         if "catch" not in description.casefold():
             non_catch.append(description)
+            continue
+        if re.search(r"\bunknown\s+gender\b", description, re.IGNORECASE):
+            quests.append({
+                "code": code,
+                "description": description,
+                "kind": "unknown_gender",
+                "name": "unknown gender",
+                "remaining": remaining,
+            })
             continue
         for kind, names in (("type", line_types), ("region", line_regions)):
             for name in names:
@@ -764,6 +818,21 @@ class TypeRegionPings(commands.Cog):
             "_synced_active": previous_state.get("_synced_active", []),
         }
         await self._save_quest_state(ctx.guild.id, ctx.author.id, state)
+        unknown_gender_quest = any(
+            quest["kind"] == "unknown_gender" for quest in state["quests"]
+        )
+        if unknown_gender_quest:
+            await db.execute(
+                """
+                INSERT INTO collection_pings (serverid, userid, pokemon_name)
+                SELECT $1, $2, UNNEST($3::text[])
+                ON CONFLICT (serverid, userid, pokemon_name) DO NOTHING
+                """,
+                ctx.guild.id,
+                ctx.author.id,
+                sorted(UNKNOWN_GENDER_POKEMON),
+            )
+            await refresh_collection_cache(db)
         await self._sync_active_quest_pings(ctx.guild.id, ctx.author.id)
         if ctx.guild.id in GRIND_SUPPORT_SERVER_IDS:
             type_requirements = {}
@@ -879,9 +948,15 @@ class TypeRegionPings(commands.Cog):
             region_names = parse_user_enabled_keys(row["region_pings"] if row else None, "regions")
             old_active = state.get("_synced_active", [])
             for quest in old_active:
-                (type_names if quest["kind"] == "type" else region_names).discard(quest["name"])
+                if quest["kind"] == "type":
+                    type_names.discard(quest["name"])
+                elif quest["kind"] == "region":
+                    region_names.discard(quest["name"])
             for quest in active:
-                (type_names if quest["kind"] == "type" else region_names).add(quest["name"])
+                if quest["kind"] == "type":
+                    type_names.add(quest["name"])
+                elif quest["kind"] == "region":
+                    region_names.add(quest["name"])
             state["_synced_active"] = deepcopy(active)
             await self._save_quest_state(server_id, user_id, state)
             await db.execute(

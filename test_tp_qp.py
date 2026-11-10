@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from commands.tp_qp import (
+    UNKNOWN_GENDER_POKEMON,
     build_ping_payload,
     get_pokemons_for_regions,
     get_pokemons_for_types,
@@ -134,6 +135,7 @@ def test_parse_event_quests_separates_catchable_and_non_catch_quests():
     } == {
         ("b1", "type", "flying", 17),
         ("d1", "region", "galar", 14),
+        ("d2", "unknown_gender", "unknown gender", 12),
         ("e1", "type", "ice", 15),
         ("c2", "type", "poison", 14),
         ("e2", "type", "ghost", 17),
@@ -151,6 +153,21 @@ def test_parse_event_quests_separates_catchable_and_non_catch_quests():
     }
     assert "evolve 14 pokémon" in non_catch
     assert "release 19 pokémon" in non_catch
+
+
+def test_parse_event_quests_includes_unknown_gender_quest():
+    quests, _ = parse_event_quests(
+        make_message("E4. Catch 15 Unknown gender pokémon (9/15)")
+    )
+
+    assert quests == [{
+        "code": "e4",
+        "description": "catch 15 unknown gender pokémon",
+        "kind": "unknown_gender",
+        "name": "unknown gender",
+        "remaining": 6,
+    }]
+    assert UNKNOWN_GENDER_POKEMON
 
 
 def test_remove_completed_quest_removes_queued_inactive_quests():
