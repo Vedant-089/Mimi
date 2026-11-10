@@ -1,6 +1,9 @@
 import json
 import logging
 import re
+import asyncio
+import os
+from copy import deepcopy
 import discord
 from discord.ext import commands
 from database import db
@@ -12,6 +15,10 @@ from functions import (
 )
 
 LOGGER = logging.getLogger(__name__)
+QUEST_COMPLETION_BOT_ID = 716390085896962058
+QUEST_DATA_FILE = "quest_data.json"
+_QUEST_STATE_LOCK = asyncio.Lock()
+_QUEST_FILE_LOCK = asyncio.Lock()
 
 # Load type and region JSON mappings
 with open("typing.json", "r", encoding="utf-8") as f:
@@ -266,6 +273,50 @@ def parse_quest_pings(message: discord.Message):
     return found_types, found_regions, type_requirements, region_requirements
 
 
+def parse_event_quests(message: discord.Message) -> tuple[list[dict], list[str]]:
+    """Return catchable type/region quests and descriptions of other quests."""
+    text_parts = []
+    for source_message in [message, *(getattr(message, "message_snapshots", None) or [])]:
+        if getattr(source_message, "content", None):
+            text_parts.append(source_message.content)
+        for embed in getattr(source_message, "embeds", []) or []:
+            text_parts.extend(_collect_embed_text(embed))
+        for component in getattr(source_message, "components", []) or []:
+            text_parts.extend(_collect_nested_strings(
+                component.to_dict() if hasattr(component, "to_dict") else vars(component)
+            ))
+
+    type_patterns = _quest_name_pattern(ALL_TYPES, "type")
+    region_patterns = _quest_name_pattern(ALL_REGIONS, "region")
+    quests = []
+    non_catch = []
+    for raw_line in _normalize_quest_text("\n".join(text_parts)).splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip(" -*")
+        progress = re.search(r"\((\d+)\s*/\s*(\d+)\)", line)
+        if not progress:
+            continue
+        code_match = re.match(r"([a-z]\d+)\.\s*(.+?)\s*\(\d+\s*/\s*\d+\)", line)
+        if not code_match:
+            continue
+        code, description = code_match.groups()
+        remaining = max(0, int(progress.group(2)) - int(progress.group(1)))
+        line_types = [name for name, pattern in type_patterns if pattern.search(line)]
+        line_regions = [name for name, pattern in region_patterns if pattern.search(line)]
+        if "catch" not in description.casefold():
+            non_catch.append(description)
+            continue
+        for kind, names in (("type", line_types), ("region", line_regions)):
+            for name in names:
+                quests.append({
+                    "code": code,
+                    "description": description,
+                    "kind": kind,
+                    "name": name,
+                    "remaining": remaining,
+                })
+    return quests, non_catch
+
+
 def build_ping_payload(names, key_name, pokemon_resolver):
     selected_names = sorted(set(names))
     return json.dumps({
@@ -467,6 +518,83 @@ class RegionPingView(PingView):
 # COG COMMANDS
 # ==================================================
 
+class QuestNumberModal(discord.ui.Modal, title="Change Number of Quest Pings"):
+    amount = discord.ui.TextInput(
+        label="Quest pings at once",
+        placeholder="Type 0 for all",
+        min_length=1,
+        max_length=6,
+    )
+
+    def __init__(self, cog, server_id: int, user_id: int):
+        super().__init__()
+        self.cog = cog
+        self.server_id = server_id
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message(
+                "❌ You cannot use this menu!", ephemeral=True
+            )
+        try:
+            amount = int(str(self.amount.value).strip())
+            if amount < 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message(
+                "❌ Type a whole number greater than or equal to 0.", ephemeral=True
+            )
+
+        settings = await self.cog._load_quest_settings(self.server_id, self.user_id)
+        settings["max_active"] = amount
+        await self.cog._save_quest_settings(self.server_id, self.user_id, settings)
+        await self.cog._sync_active_quest_pings(self.server_id, self.user_id)
+        view = QuestSettingsView(self.cog, self.server_id, self.user_id, settings)
+        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+
+class QuestSettingsView(discord.ui.View):
+    def __init__(self, cog, server_id: int, user_id: int, settings: dict):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.server_id = server_id
+        self.user_id = user_id
+        self.settings = settings
+
+    def build_embed(self) -> discord.Embed:
+        amount = self.settings.get("max_active", 1)
+        non_catch = self.settings.get("non_catch", "before")
+        embed = discord.Embed(title="Event Quest Settings", color=discord.Color.purple())
+        embed.description = (
+            f"**No. of Quest Pings at once** `{'All' if amount == 0 else amount}`\n"
+            f"**Non-Catch Quests to be completed** `{non_catch.capitalize()}`"
+        )
+        embed.set_footer(text="These settings are used when you reply to a quest embed with m!ev.")
+        return embed
+
+    @discord.ui.button(label="Change Number", style=discord.ButtonStyle.primary)
+    async def change_number(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message(
+                "❌ You cannot use this menu!", ephemeral=True
+            )
+        await interaction.response.send_modal(
+            QuestNumberModal(self.cog, self.server_id, self.user_id)
+        )
+
+    @discord.ui.button(label="Change Non-Catch Order", style=discord.ButtonStyle.secondary)
+    async def change_non_catch(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message(
+                "❌ You cannot use this menu!", ephemeral=True
+            )
+        self.settings["non_catch"] = (
+            "after" if self.settings.get("non_catch", "before") == "before" else "before"
+        )
+        await self.cog._save_quest_settings(self.server_id, self.user_id, self.settings)
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
 class TypeRegionPings(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -577,7 +705,7 @@ class TypeRegionPings(commands.Cog):
     @commands.command(name="event", aliases=["ev"])
     @commands.guild_only()
     async def event_pings_cmd(self, ctx):
-        """Adds type and region pings found in any replied-to text."""
+        """Configure event quest pings or start them from a replied-to quest embed."""
         if is_suspended(ctx.author):
             return await ctx.send(
                 "❌ You are suspended from using Mimi and cannot add pings."
@@ -585,7 +713,9 @@ class TypeRegionPings(commands.Cog):
 
         reference = ctx.message.reference
         if reference is None or reference.message_id is None:
-            return await ctx.send("❌ Reply to a message containing quest descriptions.")
+            settings = await self._load_quest_settings(ctx.guild.id, ctx.author.id)
+            view = QuestSettingsView(self, ctx.guild.id, ctx.author.id, settings)
+            return await ctx.send(embed=view.build_embed(), view=view)
 
         try:
             replied_message = reference.resolved
@@ -603,100 +733,195 @@ class TypeRegionPings(commands.Cog):
         except discord.HTTPException:
             return await ctx.send("❌ I could not read the replied-to message.")
 
-        (
-            new_types,
-            new_regions,
-            type_requirements,
-            region_requirements,
-        ) = parse_quest_pings(replied_message)
-        if not new_types and not new_regions:
-            LOGGER.warning(
-                "m!ev parse returned no matches. replied_message_id=%s embeds=%d "
-                "content_length=%d. Check the 'Quest parser found no...' log above.",
-                getattr(replied_message, "id", None),
-                len(getattr(replied_message, "embeds", []) or []),
-                len(getattr(replied_message, "content", None) or ""),
-            )
+        quests, non_catch = parse_event_quests(replied_message)
+        settings = await self._load_quest_settings(ctx.guild.id, ctx.author.id)
+        if settings.get("non_catch", "before") == "before" and non_catch:
             return await ctx.send(
-                "❌ I could not find any type or region quests in that message. "
-                "Check Mimi's logs for quest-parser diagnostics."
+                "Complete your Non-Catchable Quests\n\n"
+                + "\n".join(f"• {description}" for description in non_catch)
+                + "\n\nThen use `m!ev` again to start."
             )
+        if not quests:
+            return await ctx.send("❌ I could not find any catchable type or region quests in that message.")
 
-        grind_support_enabled = (
-            ctx.guild.id in GRIND_SUPPORT_SERVER_IDS
-            and await db.fetchval(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM server_grind_support
-                    WHERE serverid = $1 AND userid = $2
+        previous_state = await self._load_quest_state(ctx.guild.id, ctx.author.id)
+        state = {
+            "quests": [quest for quest in quests if quest["remaining"] > 0],
+            "active": [],
+            "_synced_active": previous_state.get("_synced_active", []),
+        }
+        await self._save_quest_state(ctx.guild.id, ctx.author.id, state)
+        await self._sync_active_quest_pings(ctx.guild.id, ctx.author.id)
+        if ctx.guild.id in GRIND_SUPPORT_SERVER_IDS:
+            type_requirements = {}
+            region_requirements = {}
+            for quest in state["quests"]:
+                target = (
+                    type_requirements
+                    if quest["kind"] == "type"
+                    else region_requirements
                 )
-                """,
+                target[quest["name"]] = max(
+                    quest["remaining"], target.get(quest["name"], 0)
+                )
+            await set_quest_requirements(
                 ctx.guild.id,
                 ctx.author.id,
+                type_requirements,
+                region_requirements,
+                replace_types=True,
             )
-        )
-        row = await db.fetchrow(
-            """
-            SELECT type_pings, region_pings
-            FROM tp_qp
-            WHERE serverid = $1 AND userid = $2
-            """,
-            ctx.guild.id,
-            ctx.author.id,
-        )
-        active_types = parse_user_enabled_keys(
-            row["type_pings"] if row else None, "types"
-        )
-        active_regions = parse_user_enabled_keys(
-            row["region_pings"] if row else None, "regions"
-        )
-        previous_types = set(active_types)
-        if grind_support_enabled:
-            active_types = set(new_types)
-        added_types = sorted(new_types - previous_types)
-        removed_types = sorted(previous_types - new_types)
-        added_regions = sorted(new_regions - active_regions)
-        active_types.update(new_types)
-        active_regions.update(new_regions)
 
-        await db.execute(
-            """
-            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (serverid, userid)
-            DO UPDATE SET
-                type_pings = EXCLUDED.type_pings,
-                region_pings = EXCLUDED.region_pings;
-            """,
-            ctx.guild.id,
-            ctx.author.id,
-            build_ping_payload(active_types, "types", get_pokemons_for_types),
-            build_ping_payload(active_regions, "regions", get_pokemons_for_regions),
-        )
-        await refresh_tp_qp_cache(db)
-        await set_quest_requirements(
-            ctx.guild.id,
-            ctx.author.id,
-            type_requirements,
-            region_requirements,
-            replace_types=grind_support_enabled,
-        )
+        active = await self._load_quest_state(ctx.guild.id, ctx.author.id)
+        active_names = len(active.get("active", []))
+        response = f"✅ Stored {len(state['quests'])} catch quests and started {active_names} quest ping(s)."
+        if settings.get("non_catch", "before") == "after" and non_catch:
+            response += (
+                "\n\nComplete your Non-Catchable Quests\n\n"
+                + "\n".join(f"• {description}" for description in non_catch)
+            )
+        await ctx.send(response)
 
-        added = []
-        if added_types:
-            added.append(f"types: {', '.join(name.capitalize() for name in added_types)}")
-        if removed_types:
-            added.append(
-                f"removed types: {', '.join(name.capitalize() for name in removed_types)}"
+    async def _load_quest_settings(self, server_id: int, user_id: int) -> dict:
+        data = await self._load_quest_data()
+        settings = data.get(self._quest_user_key(server_id, user_id), {}).get("settings", {})
+        if not isinstance(settings, dict):
+            settings = {}
+        try:
+            max_active = max(0, int(settings.get("max_active", 1)))
+        except (TypeError, ValueError):
+            max_active = 1
+        return {
+            "max_active": max_active,
+            "non_catch": settings.get("non_catch", "before")
+            if settings.get("non_catch") in {"before", "after"} else "before",
+        }
+
+    async def _save_quest_settings(self, server_id: int, user_id: int, settings: dict):
+        async with _QUEST_FILE_LOCK:
+            data = self._read_quest_data()
+            entry = data.setdefault(self._quest_user_key(server_id, user_id), {})
+            entry["settings"] = settings
+            self._write_quest_data(data)
+
+    async def _load_quest_state(self, server_id: int, user_id: int) -> dict:
+        data = await self._load_quest_data()
+        state = data.get(self._quest_user_key(server_id, user_id), {}).get("state", {})
+        return state if isinstance(state, dict) else {}
+
+    async def _save_quest_state(self, server_id: int, user_id: int, state: dict):
+        async with _QUEST_FILE_LOCK:
+            data = self._read_quest_data()
+            entry = data.setdefault(self._quest_user_key(server_id, user_id), {})
+            entry["state"] = state
+            self._write_quest_data(data)
+
+    @staticmethod
+    def _quest_user_key(server_id: int, user_id: int) -> str:
+        return f"{server_id}:{user_id}"
+
+    async def _load_quest_data(self) -> dict:
+        async with _QUEST_FILE_LOCK:
+            return self._read_quest_data()
+
+    @staticmethod
+    def _read_quest_data() -> dict:
+        if not os.path.exists(QUEST_DATA_FILE):
+            return {}
+        try:
+            with open(QUEST_DATA_FILE, "r", encoding="utf-8") as file:
+                data = json.load(file)
+        except json.JSONDecodeError:
+            LOGGER.exception("Quest data file contains invalid JSON: %s", QUEST_DATA_FILE)
+            return {}
+        if not isinstance(data, dict):
+            LOGGER.error("Quest data file must contain a JSON object: %s", QUEST_DATA_FILE)
+            return {}
+        return data
+
+    @staticmethod
+    def _write_quest_data(data: dict):
+        temporary_file = f"{QUEST_DATA_FILE}.tmp"
+        with open(temporary_file, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2)
+            file.write("\n")
+        os.replace(temporary_file, QUEST_DATA_FILE)
+
+    async def _sync_active_quest_pings(self, server_id: int, user_id: int):
+        async with _QUEST_STATE_LOCK:
+            state = await self._load_quest_state(server_id, user_id)
+            settings = await self._load_quest_settings(server_id, user_id)
+            pending = [quest for quest in state.get("quests", []) if quest.get("remaining", 0) > 0]
+            max_active = settings["max_active"]
+            active = pending if max_active == 0 else pending[:max_active]
+            state["quests"] = pending
+            state["active"] = active
+            await self._save_quest_state(server_id, user_id, state)
+
+            row = await db.fetchrow(
+                "SELECT type_pings, region_pings FROM tp_qp WHERE serverid = $1 AND userid = $2",
+                server_id, user_id,
             )
-        if added_regions:
-            added.append(
-                f"regions: {', '.join(name.capitalize() for name in added_regions)}"
+            type_names = parse_user_enabled_keys(row["type_pings"] if row else None, "types")
+            region_names = parse_user_enabled_keys(row["region_pings"] if row else None, "regions")
+            old_active = state.get("_synced_active", [])
+            for quest in old_active:
+                (type_names if quest["kind"] == "type" else region_names).discard(quest["name"])
+            for quest in active:
+                (type_names if quest["kind"] == "type" else region_names).add(quest["name"])
+            state["_synced_active"] = deepcopy(active)
+            await self._save_quest_state(server_id, user_id, state)
+            await db.execute(
+                """
+                INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (serverid, userid)
+                DO UPDATE SET type_pings = EXCLUDED.type_pings, region_pings = EXCLUDED.region_pings
+                """,
+                server_id, user_id,
+                build_ping_payload(type_names, "types", get_pokemons_for_types),
+                build_ping_payload(region_names, "regions", get_pokemons_for_regions),
             )
-        if not added:
-            return await ctx.send("✅ All quests in that message are already in your pings.")
-        await ctx.send(f"✅ Added event pings — {'; '.join(added)}.")
+            await refresh_tp_qp_cache(db)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.id != QUEST_COMPLETION_BOT_ID or not message.reference:
+            return
+        reference = message.reference.resolved
+        if reference is None:
+            try:
+                reference = await message.channel.fetch_message(message.reference.message_id)
+            except discord.HTTPException:
+                return
+        user = getattr(reference, "author", None)
+        guild = message.guild
+        if user is None or guild is None:
+            return
+        completion_text = message.content or ""
+        for embed in getattr(message, "embeds", []) or []:
+            completion_text += "\n" + "\n".join(_collect_embed_text(embed))
+        match = re.search(
+            r"completed bingo quest\s+\*\*([a-z]\d+)\*\*\s*\(([^)]+)\)",
+            completion_text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return
+        code = match.group(1).casefold()
+        async with _QUEST_STATE_LOCK:
+            state = await self._load_quest_state(guild.id, user.id)
+            changed = False
+            for quest in state.get("quests", []):
+                if quest.get("code") == code and quest.get("remaining", 0) > 0:
+                    quest["remaining"] -= 1
+                    changed = True
+                    break
+            if not changed:
+                return
+            state["quests"] = [q for q in state.get("quests", []) if q.get("remaining", 0) > 0]
+            await self._save_quest_state(guild.id, user.id, state)
+        await self._sync_active_quest_pings(guild.id, user.id)
 
 
 async def setup(bot):

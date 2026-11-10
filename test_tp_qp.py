@@ -4,6 +4,7 @@ from commands.tp_qp import (
     build_ping_payload,
     get_pokemons_for_regions,
     get_pokemons_for_types,
+    parse_event_quests,
     parse_quest_pings,
 )
 
@@ -121,3 +122,31 @@ def test_ping_payload_resolves_canonical_keys():
 
     assert '"types": ["flying"]' in type_payload
     assert '"regions": ["galar"]' in region_payload
+
+
+def test_parse_event_quests_separates_catchable_and_non_catch_quests():
+    quests, non_catch = parse_event_quests(make_message(QUEST_DESCRIPTION))
+
+    assert {
+        (quest["code"], quest["kind"], quest["name"], quest["remaining"])
+        for quest in quests
+    } == {
+        ("b1", "type", "flying", 17),
+        ("d1", "region", "galar", 14),
+        ("e1", "type", "ice", 15),
+        ("c2", "type", "poison", 14),
+        ("e2", "type", "ghost", 17),
+        ("a3", "type", "fairy", 13),
+        ("d3", "region", "hoenn", 15),
+        ("e3", "type", "water", 16),
+        ("a4", "type", "rock", 15),
+        ("c4", "type", "bug", 18),
+        ("d4", "type", "dark", 12),
+        ("e4", "type", "grass", 16),
+        ("a5", "type", "psychic", 14),
+        ("b5", "region", "alola", 12),
+        ("c5", "region", "kalos", 18),
+        ("e5", "region", "unova", 16),
+    }
+    assert "evolve 14 pokémon" in non_catch
+    assert "release 19 pokémon" in non_catch
