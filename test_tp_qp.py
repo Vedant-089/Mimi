@@ -6,6 +6,7 @@ from commands.tp_qp import (
     get_pokemons_for_types,
     parse_event_quests,
     parse_quest_pings,
+    remove_completed_quests,
 )
 
 
@@ -150,3 +151,18 @@ def test_parse_event_quests_separates_catchable_and_non_catch_quests():
     }
     assert "evolve 14 pokémon" in non_catch
     assert "release 19 pokémon" in non_catch
+
+
+def test_remove_completed_quest_removes_queued_inactive_quests():
+    state = {
+        "quests": [
+            {"code": "a4", "kind": "type", "name": "rock", "remaining": 15},
+            {"code": "b1", "kind": "type", "name": "flying", "remaining": 17},
+        ],
+        "active": [
+            {"code": "a4", "kind": "type", "name": "rock", "remaining": 15}
+        ],
+    }
+
+    assert remove_completed_quests(state, "B1") is True
+    assert [quest["code"] for quest in state["quests"]] == ["a4"]

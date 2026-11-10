@@ -317,6 +317,19 @@ def parse_event_quests(message: discord.Message) -> tuple[list[dict], list[str]]
     return quests, non_catch
 
 
+def remove_completed_quests(state: dict, quest_code: str) -> bool:
+    """Remove every stored quest with a completed Bingo code, active or queued."""
+    quests = state.get("quests", [])
+    remaining_quests = [
+        quest for quest in quests
+        if quest.get("code", "").casefold() != quest_code.casefold()
+    ]
+    if len(remaining_quests) == len(quests):
+        return False
+    state["quests"] = remaining_quests
+    return True
+
+
 def build_ping_payload(names, key_name, pokemon_resolver):
     selected_names = sorted(set(names))
     return json.dumps({
@@ -911,15 +924,8 @@ class TypeRegionPings(commands.Cog):
         code = match.group(1).casefold()
         async with _QUEST_STATE_LOCK:
             state = await self._load_quest_state(guild.id, user.id)
-            changed = False
-            for quest in state.get("quests", []):
-                if quest.get("code") == code and quest.get("remaining", 0) > 0:
-                    quest["remaining"] -= 1
-                    changed = True
-                    break
-            if not changed:
+            if not remove_completed_quests(state, code):
                 return
-            state["quests"] = [q for q in state.get("quests", []) if q.get("remaining", 0) > 0]
             await self._save_quest_state(guild.id, user.id, state)
         await self._sync_active_quest_pings(guild.id, user.id)
 
