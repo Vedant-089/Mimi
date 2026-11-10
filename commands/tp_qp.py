@@ -10,6 +10,7 @@ from discord.ext import commands
 from database import db
 from functions import (
     GRIND_SUPPORT_SERVER_IDS,
+    get_grind_support_users,
     is_suspended,
     refresh_tp_qp_cache,
     set_quest_requirements,
@@ -771,15 +772,26 @@ class TypeRegionPings(commands.Cog):
 
     @commands.command(name="event", aliases=["ev"])
     @commands.guild_only()
-    async def event_pings_cmd(self, ctx):
+    async def event_pings_cmd(self, ctx, action: str = ""):
         """Configure event quest pings or start them from a replied-to quest embed."""
         if is_suspended(ctx.author):
             return await ctx.send(
                 "❌ You are suspended from using Mimi and cannot add pings."
             )
 
+        if action.casefold() == "clear":
+            if await self._grind_support_enabled(ctx.guild.id, ctx.author.id):
+                return await self._clear_grind_support_event_pings(ctx)
+            return await self._clear_event_pings(ctx)
+        if action:
+            return await ctx.send("❌ Use `m!ev clear` or reply to a quest embed.")
+
         reference = ctx.message.reference
         if reference is None or reference.message_id is None:
+            if await self._grind_support_enabled(ctx.guild.id, ctx.author.id):
+                return await ctx.send(
+                    "❌ Reply to a quest embed to start grind-support event pings."
+                )
             settings = await self._load_quest_settings(ctx.guild.id, ctx.author.id)
             view = QuestSettingsView(self, ctx.guild.id, ctx.author.id, settings)
             return await ctx.send(embed=view.build_embed(), view=view)
@@ -801,6 +813,8 @@ class TypeRegionPings(commands.Cog):
             return await ctx.send("❌ I could not read the replied-to message.")
 
         quests, non_catch = parse_event_quests(replied_message)
+        if await self._grind_support_enabled(ctx.guild.id, ctx.author.id):
+            return await self._start_grind_support_event(ctx, quests, non_catch)
         settings = await self._load_quest_settings(ctx.guild.id, ctx.author.id)
         if settings.get("non_catch", "before") == "before" and non_catch:
             return await ctx.send(
@@ -812,10 +826,39 @@ class TypeRegionPings(commands.Cog):
             return await ctx.send("❌ I could not find any catchable type or region quests in that message.")
 
         previous_state = await self._load_quest_state(ctx.guild.id, ctx.author.id)
+        current_pings = await db.fetchrow(
+            "SELECT type_pings, region_pings FROM tp_qp WHERE serverid = $1 AND userid = $2",
+            ctx.guild.id,
+            ctx.author.id,
+        )
+        base_types = parse_user_enabled_keys(
+            current_pings["type_pings"] if current_pings else None, "types"
+        )
+        base_regions = parse_user_enabled_keys(
+            current_pings["region_pings"] if current_pings else None, "regions"
+        )
+        unknown_gender_added = []
+        if any(quest["kind"] == "unknown_gender" for quest in quests):
+            existing_collection = {
+                row["pokemon_name"]
+                for row in await db.fetch(
+                    """
+                    SELECT pokemon_name FROM collection_pings
+                    WHERE serverid = $1 AND userid = $2 AND pokemon_name = ANY($3::text[])
+                    """,
+                    ctx.guild.id,
+                    ctx.author.id,
+                    sorted(UNKNOWN_GENDER_POKEMON),
+                )
+            }
+            unknown_gender_added = sorted(UNKNOWN_GENDER_POKEMON - existing_collection)
         state = {
             "quests": [quest for quest in quests if quest["remaining"] > 0],
             "active": [],
             "_synced_active": previous_state.get("_synced_active", []),
+            "_base_types": sorted(base_types),
+            "_base_regions": sorted(base_regions),
+            "unknown_gender_collection_added": unknown_gender_added,
         }
         await self._save_quest_state(ctx.guild.id, ctx.author.id, state)
         unknown_gender_quest = any(
@@ -838,6 +881,8 @@ class TypeRegionPings(commands.Cog):
             type_requirements = {}
             region_requirements = {}
             for quest in state["quests"]:
+                if quest["kind"] not in {"type", "region"}:
+                    continue
                 target = (
                     type_requirements
                     if quest["kind"] == "type"
@@ -863,6 +908,127 @@ class TypeRegionPings(commands.Cog):
                 + "\n".join(f"• {description}" for description in non_catch)
             )
         await ctx.send(response)
+
+    async def _grind_support_enabled(self, server_id: int, user_id: int) -> bool:
+        if server_id not in GRIND_SUPPORT_SERVER_IDS:
+            return False
+        return user_id in await get_grind_support_users(db, server_id)
+
+    async def _start_grind_support_event(self, ctx, quests, non_catch):
+        type_requirements = {}
+        region_requirements = {}
+        new_types = set()
+        new_regions = set()
+        for quest in quests:
+            if quest["kind"] == "type":
+                new_types.add(quest["name"])
+                type_requirements[quest["name"]] = max(
+                    quest["remaining"],
+                    type_requirements.get(quest["name"], 0),
+                )
+            elif quest["kind"] == "region":
+                new_regions.add(quest["name"])
+                region_requirements[quest["name"]] = max(
+                    quest["remaining"],
+                    region_requirements.get(quest["name"], 0),
+                )
+        if not new_types and not new_regions:
+            return await ctx.send("❌ No type or region quests were found for grind support.")
+        await db.execute(
+            """
+            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (serverid, userid)
+            DO UPDATE SET type_pings = EXCLUDED.type_pings,
+                          region_pings = EXCLUDED.region_pings
+            """,
+            ctx.guild.id,
+            ctx.author.id,
+            build_ping_payload(new_types, "types", get_pokemons_for_types),
+            build_ping_payload(new_regions, "regions", get_pokemons_for_regions),
+        )
+        await refresh_tp_qp_cache(db)
+        await set_quest_requirements(
+            ctx.guild.id,
+            ctx.author.id,
+            type_requirements,
+            region_requirements,
+            replace_types=True,
+        )
+        await ctx.send(
+            "✅ Grind support event pings started — "
+            f"{len(new_types)} type and {len(new_regions)} region quest(s)."
+        )
+
+    async def _clear_grind_support_event_pings(self, ctx):
+        await db.execute(
+            """
+            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+            VALUES ($1, $2, NULL, NULL)
+            ON CONFLICT (serverid, userid)
+            DO UPDATE SET type_pings = NULL, region_pings = NULL
+            """,
+            ctx.guild.id,
+            ctx.author.id,
+        )
+        await refresh_tp_qp_cache(db)
+        await set_quest_requirements(
+            ctx.guild.id, ctx.author.id, {}, {}, replace_types=True
+        )
+        await ctx.send("✅ Cleared your grind-support event pings.")
+
+    async def _clear_event_pings(self, ctx):
+        async with _QUEST_STATE_LOCK:
+            state = await self._load_quest_state(ctx.guild.id, ctx.author.id)
+            if (
+                not state.get("quests")
+                and not state.get("_synced_active")
+                and not state.get("unknown_gender_collection_added")
+            ):
+                return await ctx.send("ℹ️ You have no stored event quests or event pings.")
+
+            base_types = set(state.get("_base_types", []))
+            base_regions = set(state.get("_base_regions", []))
+            if "_base_types" not in state:
+                for quest in state.get("_synced_active", []):
+                    if quest.get("kind") == "type":
+                        base_types.discard(quest.get("name"))
+                    elif quest.get("kind") == "region":
+                        base_regions.discard(quest.get("name"))
+
+            added_collection = state.get("unknown_gender_collection_added", [])
+            if added_collection:
+                await db.execute(
+                    """
+                    DELETE FROM collection_pings
+                    WHERE serverid = $1 AND userid = $2 AND pokemon_name = ANY($3::text[])
+                    """,
+                    ctx.guild.id,
+                    ctx.author.id,
+                    added_collection,
+                )
+                await refresh_collection_cache(db)
+
+            await db.execute(
+                """
+                INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (serverid, userid)
+                DO UPDATE SET type_pings = EXCLUDED.type_pings,
+                              region_pings = EXCLUDED.region_pings
+                """,
+                ctx.guild.id,
+                ctx.author.id,
+                build_ping_payload(base_types, "types", get_pokemons_for_types),
+                build_ping_payload(base_regions, "regions", get_pokemons_for_regions),
+            )
+            await refresh_tp_qp_cache(db)
+            await self._save_quest_state(ctx.guild.id, ctx.author.id, {})
+            if ctx.guild.id in GRIND_SUPPORT_SERVER_IDS:
+                await set_quest_requirements(
+                    ctx.guild.id, ctx.author.id, {}, {}, replace_types=True
+                )
+        await ctx.send("✅ Cleared your event quests and event-added pings.")
 
     async def _load_quest_settings(self, server_id: int, user_id: int) -> dict:
         data = await self._load_quest_data()
