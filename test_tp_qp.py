@@ -7,12 +7,14 @@ from commands.tp_qp import (
     UNKNOWN_GENDER_POKEMON,
     TypeRegionPings,
     build_ping_payload,
+    consume_channel_quest_quota,
     get_pokemons_for_regions,
     get_pokemons_for_types,
     matching_saved_channel_ids,
     parse_event_quests,
     parse_quest_pings,
     remove_completed_quests,
+    tagged_saved_channels,
 )
 
 
@@ -263,6 +265,46 @@ def test_matching_saved_channel_ids_dedupes_current_quest_channels():
     assert matching_saved_channel_ids(channel_data, ["dark", "Sinnoh"]) == [11, 12, 13]
 
 
+def test_tagged_saved_channels_marks_overlapping_type_and_region():
+    tagged = tagged_saved_channels(
+        {"dark": [11, 12], "sinnoh": [12, 13]},
+        ["dark"],
+        ["sinnoh"],
+    )
+
+    assert tagged == [
+        (11, {"dark"}, set()),
+        (12, {"dark"}, {"sinnoh"}),
+        (13, set(), {"sinnoh"}),
+    ]
+
+
+def test_consume_channel_quest_quota_counts_dual_match_once_per_quest():
+    remaining_types = {"dark": 14}
+    remaining_regions = {"sinnoh": 10}
+
+    consume_types, consume_regions = consume_channel_quest_quota(
+        remaining_types,
+        remaining_regions,
+        {"dark"},
+        {"sinnoh"},
+    )
+
+    assert consume_types == {"dark"}
+    assert consume_regions == {"sinnoh"}
+    remaining_types["dark"] -= 1
+    remaining_regions["sinnoh"] -= 1
+    assert remaining_types["dark"] == 13
+    assert remaining_regions["sinnoh"] == 9
+
+    assert consume_channel_quest_quota(
+        {"dark": 0},
+        {"sinnoh": 0},
+        {"dark"},
+        {"sinnoh"},
+    ) == (set(), set())
+
+
 def test_grind_support_notify_pings_visible_guild_channels_once():
     class FakeChannel:
         def __init__(self, channel_id, guild):
@@ -306,6 +348,12 @@ def test_grind_support_notify_pings_visible_guild_channels_once():
         "dark": [11, 12, 99, 11],
         "water": [100],
     }
+    persisted = []
+
+    async def fake_persist(server_id, user_id, remaining_types, remaining_regions):
+        persisted.append((server_id, user_id, dict(remaining_types), dict(remaining_regions)))
+
+    cog._persist_grind_support_remaining = fake_persist
     ctx = SimpleNamespace(
         guild=guild,
         author=SimpleNamespace(id=2, mention="<@2>"),
@@ -319,6 +367,97 @@ def test_grind_support_notify_pings_visible_guild_channels_once():
     assert local_channel.sent == ["<@2>"]
     assert thread_channel.sent == ["<@2>"]
     assert foreign_channel.sent == []
+    assert persisted == [(1, 2, {"dark": 16}, {})]
+
+
+def _fake_notify_cog(channel_map, channel_data):
+    class FakeChannel:
+        def __init__(self, channel_id, guild):
+            self.id = channel_id
+            self.guild = guild
+            self.sent = []
+
+        async def send(self, content):
+            self.sent.append(content)
+
+    class FakeGuild:
+        def __init__(self, guild_id):
+            self.id = guild_id
+            self.channels = {}
+
+        def get_channel(self, channel_id):
+            return self.channels.get(channel_id)
+
+        def get_thread(self, channel_id):
+            return None
+
+    class FakeBot:
+        def get_channel(self, channel_id):
+            return None
+
+    guild = FakeGuild(1)
+    channels = {
+        channel_id: FakeChannel(channel_id, guild)
+        for channel_id in channel_map
+    }
+    guild.channels = channels
+    persisted = []
+    cog = TypeRegionPings.__new__(TypeRegionPings)
+    cog.bot = FakeBot()
+    cog._read_type_channel_data = lambda: channel_data
+
+    async def fake_persist(server_id, user_id, remaining_types, remaining_regions):
+        persisted.append((dict(remaining_types), dict(remaining_regions)))
+
+    cog._persist_grind_support_remaining = fake_persist
+    ctx = SimpleNamespace(
+        guild=guild,
+        author=SimpleNamespace(id=2, mention="<@2>"),
+    )
+    return cog, ctx, channels, persisted
+
+
+def test_grind_support_notify_caps_pings_to_remaining_needed():
+    cog, ctx, channels, persisted = _fake_notify_cog(
+        (11, 12, 13),
+        {"dark": [11, 12, 13]},
+    )
+
+    sent = asyncio.run(
+        cog._notify_existing_grind_support_channels(ctx, {"dark": 2}, {})
+    )
+
+    assert sent == 2
+    assert [channels[channel_id].sent for channel_id in (11, 12, 13)] == [
+        ["<@2>"],
+        ["<@2>"],
+        [],
+    ]
+    assert persisted == [({"dark": 0}, {})]
+
+
+def test_grind_support_notify_pings_dual_type_region_channel_once():
+    cog, ctx, channels, persisted = _fake_notify_cog(
+        (11, 12, 13, 14),
+        {"dark": [12, 13], "sinnoh": [12, 14]},
+    )
+
+    sent = asyncio.run(
+        cog._notify_existing_grind_support_channels(
+            ctx,
+            {"dark": 1},
+            {"sinnoh": 1},
+        )
+    )
+
+    assert sent == 1
+    assert [channels[channel_id].sent for channel_id in (11, 12, 13, 14)] == [
+        [],
+        ["<@2>"],
+        [],
+        [],
+    ]
+    assert persisted == [({"dark": 0}, {"sinnoh": 0})]
 
 
 def test_grind_support_backfill_requires_a_matching_remaining_quest():

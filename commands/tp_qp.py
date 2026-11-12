@@ -395,31 +395,80 @@ def build_ping_payload(names, key_name, pokemon_resolver):
 
 def matching_saved_channel_ids(channel_data, names) -> list[int]:
     """Return unique type_channels.json IDs for the requested type/region names."""
+    return [channel_id for channel_id, _, _ in tagged_saved_channels(channel_data, names, [])]
+
+
+def _parse_saved_channel_ids(saved_ids):
+    if isinstance(saved_ids, (int, str)):
+        saved_ids = [saved_ids]
+    if not isinstance(saved_ids, (list, tuple, set)):
+        return []
+    parsed_ids = []
+    seen = set()
+    for channel_id in saved_ids:
+        try:
+            parsed_id = int(channel_id)
+        except (TypeError, ValueError):
+            continue
+        if parsed_id in seen:
+            continue
+        seen.add(parsed_id)
+        parsed_ids.append(parsed_id)
+    return parsed_ids
+
+
+def _unique_casefold_names(names):
+    ordered = []
+    seen = set()
+    for name in names:
+        key = str(name).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
+
+
+def tagged_saved_channels(channel_data, type_names, region_names):
+    """Return unique saved channels with the type/region quests they can fill."""
     if not isinstance(channel_data, dict):
         return []
 
     normalized = {
-        str(name).casefold(): saved_ids
+        str(name).casefold(): _parse_saved_channel_ids(saved_ids)
         for name, saved_ids in channel_data.items()
     }
-    channel_ids = []
-    seen = set()
-    for name in names:
-        saved_ids = normalized.get(str(name).casefold(), [])
-        if isinstance(saved_ids, (int, str)):
-            saved_ids = [saved_ids]
-        if not isinstance(saved_ids, (list, tuple, set)):
-            continue
-        for channel_id in saved_ids:
-            try:
-                parsed_id = int(channel_id)
-            except (TypeError, ValueError):
-                continue
-            if parsed_id in seen:
-                continue
-            seen.add(parsed_id)
-            channel_ids.append(parsed_id)
-    return channel_ids
+    type_order = _unique_casefold_names(type_names)
+    region_order = _unique_casefold_names(region_names)
+    type_set = set(type_order)
+    tagged = {}
+    order = []
+    for name in (*type_order, *region_order):
+        kind = "types" if name in type_set else "regions"
+        for channel_id in normalized.get(name, []):
+            if channel_id not in tagged:
+                tagged[channel_id] = {"types": set(), "regions": set()}
+                order.append(channel_id)
+            tagged[channel_id][kind].add(name)
+    return [
+        (channel_id, tagged[channel_id]["types"], tagged[channel_id]["regions"])
+        for channel_id in order
+    ]
+
+
+def consume_channel_quest_quota(remaining_types, remaining_regions, channel_types, channel_regions):
+    """Return the type/region quotas this one channel ping should consume, if any."""
+    consume_types = {
+        name for name in channel_types
+        if remaining_types.get(name, 0) > 0
+    }
+    consume_regions = {
+        name for name in channel_regions
+        if remaining_regions.get(name, 0) > 0
+    }
+    if not consume_types and not consume_regions:
+        return set(), set()
+    return consume_types, consume_regions
 
 
 def parse_ping_arguments(arguments, valid_names):
@@ -1010,20 +1059,36 @@ class TypeRegionPings(commands.Cog):
         type_requirements: dict[str, int],
         region_requirements: dict[str, int],
     ) -> int:
-        """Ping each matching saved channel once in the current guild.
+        """Ping at most the remaining needed count per type/region in this guild.
 
-        Channel IDs come from type_channels.json, not historical spawn rows.
-        Quotas are consumed by actual Pokémon spawns in the spawn handler,
-        not by this setup notification.
+        A channel saved under both a needed type and a needed region is pinged
+        once. Each successful ping decreases every matching remaining count by 1.
         """
         channel_data = await asyncio.to_thread(self._read_type_channel_data)
-        saved_channel_ids = matching_saved_channel_ids(
+        remaining_types = {
+            str(name).casefold(): max(0, int(remaining))
+            for name, remaining in type_requirements.items()
+        }
+        remaining_regions = {
+            str(name).casefold(): max(0, int(remaining))
+            for name, remaining in region_requirements.items()
+        }
+        candidates = tagged_saved_channels(
             channel_data,
-            (*type_requirements, *region_requirements),
+            remaining_types,
+            remaining_regions,
         )
         sent_count = 0
         unresolved = 0
-        for channel_id in saved_channel_ids:
+        for channel_id, channel_types, channel_regions in candidates:
+            consume_types, consume_regions = consume_channel_quest_quota(
+                remaining_types,
+                remaining_regions,
+                channel_types,
+                channel_regions,
+            )
+            if not consume_types and not consume_regions:
+                continue
             channel = self._resolve_guild_channel(ctx.guild, channel_id)
             if channel is None:
                 unresolved += 1
@@ -1036,28 +1101,76 @@ class TypeRegionPings(commands.Cog):
                     channel.id,
                 )
                 continue
+            for name in consume_types:
+                remaining_types[name] -= 1
+            for name in consume_regions:
+                remaining_regions[name] -= 1
             sent_count += 1
             print(
                 f"[m!ev] sent one channel ping channel={channel.id} "
-                f"types={sorted(type_requirements)} "
-                f"regions={sorted(region_requirements)}"
+                f"consumed_types={sorted(consume_types)} "
+                f"consumed_regions={sorted(consume_regions)}"
             )
 
+        await self._persist_grind_support_remaining(
+            ctx.guild.id,
+            ctx.author.id,
+            remaining_types,
+            remaining_regions,
+        )
         print(
             f"[m!ev] channel notify guild={ctx.guild.id} user={ctx.author.id} "
-            f"saved={len(saved_channel_ids)} sent={sent_count} "
-            f"unresolved={unresolved} file={TYPE_CHANNELS_FILE}"
+            f"candidates={len(candidates)} sent={sent_count} "
+            f"unresolved={unresolved} remaining_types={remaining_types} "
+            f"remaining_regions={remaining_regions} file={TYPE_CHANNELS_FILE}"
         )
-        if saved_channel_ids and sent_count == 0:
+        if candidates and sent_count == 0:
             LOGGER.warning(
                 "Grind-support event found %s saved channel id(s) for %s/%s "
                 "but none were visible in guild %s",
-                len(saved_channel_ids),
+                len(candidates),
                 sorted(type_requirements),
                 sorted(region_requirements),
                 ctx.guild.id,
             )
         return sent_count
+
+    async def _persist_grind_support_remaining(
+        self,
+        server_id: int,
+        user_id: int,
+        remaining_types: dict[str, int],
+        remaining_regions: dict[str, int],
+    ):
+        await set_quest_requirements(
+            server_id,
+            user_id,
+            remaining_types,
+            remaining_regions,
+            replace_types=True,
+        )
+        await db.execute(
+            """
+            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (serverid, userid)
+            DO UPDATE SET type_pings = EXCLUDED.type_pings,
+                          region_pings = EXCLUDED.region_pings
+            """,
+            server_id,
+            user_id,
+            build_ping_payload(
+                [name for name, remaining in remaining_types.items() if remaining > 0],
+                "types",
+                get_pokemons_for_types,
+            ),
+            build_ping_payload(
+                [name for name, remaining in remaining_regions.items() if remaining > 0],
+                "regions",
+                get_pokemons_for_regions,
+            ),
+        )
+        await refresh_tp_qp_cache(db)
 
     def _resolve_guild_channel(self, guild, channel_id: int):
         getter = getattr(guild, "get_channel_or_thread", None)
