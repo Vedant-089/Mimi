@@ -992,66 +992,57 @@ class TypeRegionPings(commands.Cog):
             }
             backfilled = 0
 
-            for kind, requirements in (
-                ("type", type_requirements),
-                ("region", region_requirements),
-            ):
-                for name, needed in requirements.items():
-                    saved_ids = channel_data.get(name, [])
-                    if not isinstance(saved_ids, list):
+            channels_by_id = {}
+            for name in set(type_requirements) | set(region_requirements):
+                for channel_id in channel_data.get(name, []):
+                    try:
+                        channel_id = int(channel_id)
+                    except (TypeError, ValueError):
                         continue
+                    entry = channels_by_id.setdefault(
+                        channel_id,
+                        {"types": [], "regions": []},
+                    )
+                    if name in type_requirements:
+                        entry["types"].append(name)
+                    if name in region_requirements:
+                        entry["regions"].append(name)
 
-                    sent = 0
-                    for channel_id in dict.fromkeys(saved_ids):
-                        if sent >= needed:
-                            break
-                        try:
-                            channel = ctx.guild.get_channel(int(channel_id))
-                        except (TypeError, ValueError):
-                            continue
-                        if channel is None:
-                            continue
-                        if kind == "type":
-                            type_users, _ = await limit_quest_ping_users(
-                                ctx.guild.id,
-                                {ctx.author.id},
-                                db,
-                                [ctx.author.id],
-                                [],
-                                [name],
-                                [],
-                                require_matching_quest=True,
-                            )
-                        else:
-                            _, region_users = await limit_quest_ping_users(
-                                ctx.guild.id,
-                                {ctx.author.id},
-                                db,
-                                [],
-                                [ctx.author.id],
-                                [],
-                                [name],
-                                require_matching_quest=True,
-                            )
-                        if not (type_users if kind == "type" else region_users):
-                            break
+            for channel_id, names in channels_by_id.items():
+                try:
+                    channel = ctx.guild.get_channel(channel_id)
+                except (TypeError, ValueError):
+                    continue
+                if channel is None:
+                    continue
 
-                        try:
-                            await channel.send(ctx.author.mention)
-                        except (discord.Forbidden, discord.HTTPException):
-                            LOGGER.warning(
-                                "Could not send %s quest ping in channel %s",
-                                kind,
-                                channel.id,
-                            )
-                            continue
+                type_users, region_users = await limit_quest_ping_users(
+                    ctx.guild.id,
+                    {ctx.author.id},
+                    db,
+                    [ctx.author.id],
+                    [ctx.author.id],
+                    list(dict.fromkeys(names["types"])),
+                    list(dict.fromkeys(names["regions"])),
+                    require_matching_quest=True,
+                )
+                if not type_users and not region_users:
+                    continue
 
-                        sent += 1
-                        backfilled += 1
-                        print(
-                            f"[m!ev] sent {kind} ping name={name} "
-                            f"channel={channel.id} count={sent}/{needed}"
-                        )
+                try:
+                    await channel.send(ctx.author.mention)
+                except (discord.Forbidden, discord.HTTPException):
+                    LOGGER.warning(
+                        "Could not send quest ping in channel %s",
+                        channel.id,
+                    )
+                    continue
+
+                backfilled += 1
+                print(
+                    f"[m!ev] sent one deduplicated ping channel={channel.id} "
+                    f"types={names['types']} regions={names['regions']}"
+                )
 
             return backfilled
 
