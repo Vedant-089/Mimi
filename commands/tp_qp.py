@@ -1007,8 +1007,28 @@ class TypeRegionPings(commands.Cog):
         }
 
         async with _QUEST_STATE_LOCK:
+            channel_data = await asyncio.to_thread(self._read_type_channel_data)
+            relevant_names = set(type_requirements) | set(region_requirements)
+            channel_ids = {
+                int(channel_id)
+                for name, saved_ids in channel_data.items()
+                if name.casefold() in relevant_names
+                and isinstance(saved_ids, list)
+                for channel_id in saved_ids
+                if str(channel_id).isdigit()
+            }
+            print(
+                f"[m!ev] targeted channel count={len(channel_ids)} "
+                f"for names={sorted(relevant_names)}"
+            )
             messages = []
-            for channel in ctx.guild.text_channels:
+            for channel_id in channel_ids:
+                channel = ctx.guild.get_channel(channel_id) or self.bot.get_channel(
+                    channel_id
+                )
+                if channel is None or getattr(channel, "guild", None) != ctx.guild:
+                    print(f"[m!ev] saved channel unavailable channel={channel_id}")
+                    continue
                 print(f"[m!ev] scanning channel={channel.id} name={channel.name!r}")
                 try:
                     async for message in channel.history(limit=None):
