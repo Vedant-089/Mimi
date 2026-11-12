@@ -781,6 +781,11 @@ class TypeRegionPings(commands.Cog):
     @commands.guild_only()
     async def event_pings_cmd(self, ctx, action: str = ""):
         """Configure event quest pings or start them from a replied-to quest embed."""
+        print(
+            f"[m!ev] command received guild={ctx.guild.id} "
+            f"user={ctx.author.id} action={action!r} "
+            f"has_reference={ctx.message.reference is not None}"
+        )
         if is_suspended(ctx.author):
             return await ctx.send(
                 "❌ You are suspended from using Mimi and cannot add pings."
@@ -922,6 +927,10 @@ class TypeRegionPings(commands.Cog):
         return user_id in await get_grind_support_users(db, server_id)
 
     async def _start_grind_support_event(self, ctx, quests, non_catch):
+        print(
+            f"[m!ev] starting grind-support event guild={ctx.guild.id} "
+            f"user={ctx.author.id} quests={len(quests)}"
+        )
         type_requirements = {}
         region_requirements = {}
         new_types = set()
@@ -962,6 +971,9 @@ class TypeRegionPings(commands.Cog):
             region_requirements,
             replace_types=True,
         )
+        await ctx.send(
+            "🔎 Event quests saved. Searching this server for matching unclaimed spawns..."
+        )
         backfilled = await self._backfill_existing_spawns(
             ctx,
             type_requirements,
@@ -982,6 +994,7 @@ class TypeRegionPings(commands.Cog):
         """Ping this user for matching, unclaimed spawn responses in this guild."""
         bot_user_id = getattr(self.bot.user, "id", None)
         if bot_user_id is None:
+            print("[m!ev] backfill skipped: bot user is not ready")
             return 0
 
         type_lookup = {
@@ -996,6 +1009,7 @@ class TypeRegionPings(commands.Cog):
         async with _QUEST_STATE_LOCK:
             messages = []
             for channel in ctx.guild.text_channels:
+                print(f"[m!ev] scanning channel={channel.id} name={channel.name!r}")
                 try:
                     async for message in channel.history(limit=None):
                         if message.author.id != bot_user_id:
@@ -1010,7 +1024,9 @@ class TypeRegionPings(commands.Cog):
                         "Could not scan spawn history in channel %s",
                         channel.id,
                     )
+                    print(f"[m!ev] could not scan channel={channel.id}")
 
+            print(f"[m!ev] found {len(messages)} candidate spawn responses")
             messages.sort(key=lambda item: item[0])
             backfilled = 0
             for message_id, message, pokemon_name in messages:
@@ -1057,7 +1073,18 @@ class TypeRegionPings(commands.Cog):
                 if not type_users and not region_users:
                     continue
 
-                await message.channel.send(ctx.author.mention)
+                try:
+                    await message.channel.send(ctx.author.mention)
+                except (discord.Forbidden, discord.HTTPException):
+                    LOGGER.exception(
+                        "Could not send backfill ping in channel %s",
+                        message.channel.id,
+                    )
+                    print(
+                        f"[m!ev] failed to send backfill ping "
+                        f"channel={message.channel.id} message={message.id}"
+                    )
+                    continue
                 await db.execute(
                     """
                     INSERT INTO grind_support (
@@ -1073,6 +1100,10 @@ class TypeRegionPings(commands.Cog):
                     ctx.author.id,
                 )
                 backfilled += 1
+                print(
+                    f"[m!ev] backfilled pokemon={pokemon_name} "
+                    f"message={message_id} count={backfilled}"
+                )
 
             return backfilled
 
