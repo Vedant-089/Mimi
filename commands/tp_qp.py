@@ -990,45 +990,73 @@ class TypeRegionPings(commands.Cog):
                     await asyncio.to_thread(self._read_type_channel_data)
                 ).items()
             }
+            relevant_names = set(type_requirements) | set(region_requirements)
+            saved_channel_ids = {
+                int(channel_id)
+                for name in relevant_names
+                for channel_id in channel_data.get(name, [])
+                if str(channel_id).isdigit()
+            }
+            if not saved_channel_ids:
+                return 0
+
+            rows = await db.fetch(
+                """
+                SELECT spawn.spawn_order, spawn.channelid, spawn.pokemon_name
+                FROM grind_support_spawns AS spawn
+                WHERE spawn.guildid = $1
+                  AND spawn.channelid = ANY($2::bigint[])
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM grind_support AS claimed
+                      WHERE claimed.userid = $3
+                        AND claimed.spawn_order = spawn.spawn_order
+                  )
+                ORDER BY spawn.spawn_order
+                """,
+                ctx.guild.id,
+                list(saved_channel_ids),
+                ctx.author.id,
+            )
+
+            type_lookup = {
+                type_name: {name.casefold().strip() for name in pokemon_names}
+                for type_name, pokemon_names in TYPING_DATA.items()
+            }
+            region_lookup = {
+                region_name: {name.casefold().strip() for name in pokemon_names}
+                for region_name, pokemon_names in REGION_DATA.items()
+            }
             backfilled = 0
 
-            channels_by_id = {}
-            for name in set(type_requirements) | set(region_requirements):
-                for channel_id in channel_data.get(name, []):
-                    try:
-                        channel_id = int(channel_id)
-                    except (TypeError, ValueError):
-                        continue
-                    entry = channels_by_id.setdefault(
-                        channel_id,
-                        {"types": [], "regions": []},
-                    )
-                    if name in type_requirements:
-                        entry["types"].append(name)
-                    if name in region_requirements:
-                        entry["regions"].append(name)
-
-            for channel_id, names in channels_by_id.items():
-                try:
-                    channel = ctx.guild.get_channel(channel_id)
-                except (TypeError, ValueError):
-                    continue
-                if channel is None:
-                    continue
-
+            for row in rows:
+                pokemon_name = row["pokemon_name"].casefold().strip()
+                pokemon_types = [
+                    type_name
+                    for type_name, pokemon_names in type_lookup.items()
+                    if pokemon_name in pokemon_names
+                ]
+                pokemon_regions = [
+                    region_name
+                    for region_name, pokemon_names in region_lookup.items()
+                    if pokemon_name in pokemon_names
+                ]
                 type_users, region_users = await limit_quest_ping_users(
                     ctx.guild.id,
                     {ctx.author.id},
                     db,
                     [ctx.author.id],
                     [ctx.author.id],
-                    list(dict.fromkeys(names["types"])),
-                    list(dict.fromkeys(names["regions"])),
+                    pokemon_types,
+                    pokemon_regions,
                     require_matching_quest=True,
                 )
                 if not type_users and not region_users:
                     continue
 
+                channel = ctx.guild.get_channel(row["channelid"])
+                if channel is None:
+                    continue
                 try:
                     await channel.send(ctx.author.mention)
                 except (discord.Forbidden, discord.HTTPException):
@@ -1038,10 +1066,25 @@ class TypeRegionPings(commands.Cog):
                     )
                     continue
 
+                await db.execute(
+                    """
+                    INSERT INTO grind_support (
+                        guildid, channelid, messageid, pokemon_name, userid, spawn_order
+                    )
+                    VALUES ($1, $2, NULL, $3, $4, $5)
+                    ON CONFLICT (userid, spawn_order) DO NOTHING
+                    """,
+                    ctx.guild.id,
+                    channel.id,
+                    pokemon_name,
+                    ctx.author.id,
+                    row["spawn_order"],
+                )
                 backfilled += 1
                 print(
-                    f"[m!ev] sent one deduplicated ping channel={channel.id} "
-                    f"types={names['types']} regions={names['regions']}"
+                    f"[m!ev] sent one ping pokemon={pokemon_name} "
+                    f"channel={channel.id} types={pokemon_types} "
+                    f"regions={pokemon_regions}"
                 )
 
             return backfilled

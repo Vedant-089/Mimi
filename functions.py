@@ -224,6 +224,15 @@ PING_TABLES_SQL = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS grind_support_spawns (
+        spawn_order BIGSERIAL PRIMARY KEY,
+        guildid BIGINT NOT NULL,
+        channelid BIGINT NOT NULL,
+        messageid BIGINT NOT NULL UNIQUE,
+        pokemon_name TEXT NOT NULL
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS server_grind_support (
         serverid BIGINT NOT NULL,
         userid BIGINT NOT NULL,
@@ -311,6 +320,10 @@ async def ensure_ping_tables(db_instance):
     )
     await db_instance.execute(
         "CREATE INDEX IF NOT EXISTS grind_support_user_order_idx ON grind_support (userid, spawn_order);"
+    )
+    await db_instance.execute(
+        "CREATE INDEX IF NOT EXISTS grind_support_spawns_guild_channel_idx "
+        "ON grind_support_spawns (guildid, channelid, spawn_order);"
     )
 
 

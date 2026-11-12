@@ -756,6 +756,21 @@ class SpawnPredictor(commands.Cog):
             if confidence < CONF_THRESHOLD:
                 return
 
+            if message.guild.id in GRIND_SUPPORT_SERVER_IDS:
+                await db.execute(
+                    """
+                    INSERT INTO grind_support_spawns (
+                        guildid, channelid, messageid, pokemon_name
+                    )
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (messageid) DO NOTHING
+                    """,
+                    message.guild.id,
+                    message.channel.id,
+                    message.id,
+                    name.casefold(),
+                )
+
             total_ms = (
                 time.perf_counter()
                 - overall_start
