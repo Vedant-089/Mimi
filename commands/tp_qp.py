@@ -15,7 +15,6 @@ from functions import (
     is_suspended,
     refresh_tp_qp_cache,
     set_quest_requirements,
-    limit_quest_ping_users,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -958,7 +957,7 @@ class TypeRegionPings(commands.Cog):
             region_requirements,
             replace_types=True,
         )
-        await self._ping_existing_grind_support_channels(
+        await self._notify_existing_grind_support_channels(
             ctx,
             new_types,
             new_regions,
@@ -979,16 +978,14 @@ class TypeRegionPings(commands.Cog):
             return {}
         return data
 
-    async def _ping_existing_grind_support_channels(
+    async def _notify_existing_grind_support_channels(
         self,
         ctx,
         type_names: set[str],
         region_names: set[str],
     ):
         channel_data = await asyncio.to_thread(self._read_type_channel_data)
-        matched_types = set()
-        matched_regions = set()
-        channels_by_type = {}
+        channels_by_name = {}
 
         for name in type_names | region_names:
             channel_ids = channel_data.get(name, [])
@@ -1001,58 +998,17 @@ class TypeRegionPings(commands.Cog):
                     continue
                 if channel is None:
                     continue
-                channels_by_type.setdefault(name, set()).add(channel)
-                if name in type_names:
-                    matched_types.add(name)
-                if name in region_names:
-                    matched_regions.add(name)
+                channels_by_name.setdefault(name, []).append(channel)
 
-        if not matched_types and not matched_regions:
-            return
-
-        await limit_quest_ping_users(
-            ctx.guild.id,
-            {ctx.author.id},
-            db,
-            [ctx.author.id],
-            [ctx.author.id],
-            sorted(matched_types),
-            sorted(matched_regions),
-        )
-
-        row = await db.fetchrow(
-            """
-            SELECT type_pings, region_pings
-            FROM tp_qp
-            WHERE serverid = $1 AND userid = $2
-            """,
-            ctx.guild.id,
-            ctx.author.id,
-        )
-        active_types = parse_user_enabled_keys(
-            row["type_pings"] if row else None,
-            "types",
-        )
-        active_regions = parse_user_enabled_keys(
-            row["region_pings"] if row else None,
-            "regions",
-        )
-        channels_to_ping = set()
-        for name in matched_types:
-            if name in active_types:
-                channels_to_ping.update(channels_by_type.get(name, set()))
-        for name in matched_regions:
-            if name in active_regions:
-                channels_to_ping.update(channels_by_type.get(name, set()))
-
-        for channel in channels_to_ping:
-            try:
-                await channel.send(ctx.author.mention)
-            except (discord.Forbidden, discord.HTTPException):
-                LOGGER.warning(
-                    "Could not send grind-support catch-up ping to channel %s",
-                    channel.id,
-                )
+        for name in (*sorted(type_names), *sorted(region_names)):
+            for channel in channels_by_name.get(name, []):
+                try:
+                    await channel.send(ctx.author.mention)
+                except (discord.Forbidden, discord.HTTPException):
+                    LOGGER.warning(
+                        "Could not send grind-support event ping to channel %s",
+                        channel.id,
+                    )
 
     async def _clear_grind_support_event_pings(self, ctx):
         await db.execute(
