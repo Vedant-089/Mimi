@@ -1,6 +1,7 @@
 import time
 import asyncio
 import json
+import logging
 import discord
 from collections import defaultdict
 
@@ -167,6 +168,9 @@ _quest_requirements = defaultdict(
     lambda: {"types": {}, "regions": {}}
 )
 _quest_requirements_lock = asyncio.Lock()
+_QUEST_REQUIREMENTS_FILE = "grind_support_quests.json"
+_quest_requirements_loaded = False
+LOGGER = logging.getLogger(__name__)
 with open("typing.json", "r", encoding="utf-8") as _typing_file:
     _type_pokemon_names = {
         type_name: {
@@ -698,15 +702,71 @@ async def set_quest_requirements(
     if server_id not in GRIND_SUPPORT_SERVER_IDS:
         return
 
+    global _quest_requirements_loaded
     async with _quest_requirements_lock:
+        await _load_quest_requirements_locked()
         requirements = _quest_requirements[(server_id, user_id)]
         if replace_types:
             requirements["types"].clear()
             requirements["regions"].clear()
         for quest_type, remaining in type_requirements.items():
-            requirements["types"][quest_type] = max(0, remaining)
+            requirements["types"][quest_type.casefold()] = max(0, remaining)
         for region, remaining in region_requirements.items():
-            requirements["regions"][region] = max(0, remaining)
+            requirements["regions"][region.casefold()] = max(0, remaining)
+        await _save_quest_requirements_locked()
+        _quest_requirements_loaded = True
+
+
+async def _load_quest_requirements_locked():
+    global _quest_requirements_loaded
+    if _quest_requirements_loaded:
+        return
+    try:
+        with open(_QUEST_REQUIREMENTS_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        data = {}
+    except (OSError, json.JSONDecodeError):
+        LOGGER.exception("Failed to load grind-support quest requirements")
+        data = {}
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if not isinstance(value, dict):
+                continue
+            try:
+                server_id, user_id = (int(part) for part in key.split(":", 1))
+            except (TypeError, ValueError):
+                continue
+            types = value.get("types", {})
+            regions = value.get("regions", {})
+            if not isinstance(types, dict) or not isinstance(regions, dict):
+                continue
+            _quest_requirements[(server_id, user_id)] = {
+                "types": {
+                    str(name).casefold(): max(0, int(remaining))
+                    for name, remaining in types.items()
+                    if isinstance(remaining, (int, float))
+                },
+                "regions": {
+                    str(name).casefold(): max(0, int(remaining))
+                    for name, remaining in regions.items()
+                    if isinstance(remaining, (int, float))
+                },
+            }
+    _quest_requirements_loaded = True
+
+
+async def _save_quest_requirements_locked():
+    data = {
+        f"{server_id}:{user_id}": requirements
+        for (server_id, user_id), requirements in _quest_requirements.items()
+    }
+    try:
+        with open(_QUEST_REQUIREMENTS_FILE, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2, sort_keys=True)
+    except OSError:
+        LOGGER.exception("Failed to save grind-support quest requirements")
 
 
 async def limit_quest_ping_users(
@@ -723,8 +783,10 @@ async def limit_quest_ping_users(
         return type_ping_users, region_ping_users
 
     async with _quest_requirements_lock:
+        await _load_quest_requirements_locked()
         completed_types = defaultdict(set)
         completed_regions = defaultdict(set)
+        requirements_changed = False
         limited_type_users = []
         for user_id in type_ping_users:
             if user_id not in grind_support_users:
@@ -750,6 +812,7 @@ async def limit_quest_ping_users(
                     for quest_type in pokemon_types:
                         if requirements["types"].get(quest_type, 0) > 0:
                             requirements["types"][quest_type] -= 1
+                            requirements_changed = True
                             if requirements["types"][quest_type] == 0:
                                 completed_types[user_id].add(quest_type)
 
@@ -778,8 +841,12 @@ async def limit_quest_ping_users(
                     for region in pokemon_regions:
                         if requirements["regions"].get(region, 0) > 0:
                             requirements["regions"][region] -= 1
+                            requirements_changed = True
                             if requirements["regions"][region] == 0:
                                 completed_regions[user_id].add(region)
+
+        if requirements_changed:
+            await _save_quest_requirements_locked()
 
         changed_type_pings = False
         for user_id, type_names in completed_types.items():

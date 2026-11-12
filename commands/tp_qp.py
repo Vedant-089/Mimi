@@ -1100,38 +1100,6 @@ class TypeRegionPings(commands.Cog):
             return {}
         return data
 
-    async def _notify_existing_grind_support_channels(
-        self,
-        ctx,
-        type_names: set[str],
-        region_names: set[str],
-    ):
-        channel_data = await asyncio.to_thread(self._read_type_channel_data)
-        channels_by_name = {}
-
-        for name in type_names | region_names:
-            channel_ids = channel_data.get(name, [])
-            if not isinstance(channel_ids, list):
-                continue
-            for channel_id in channel_ids:
-                try:
-                    channel = ctx.guild.get_channel(int(channel_id))
-                except (TypeError, ValueError):
-                    continue
-                if channel is None:
-                    continue
-                channels_by_name.setdefault(name, []).append(channel)
-
-        for name in (*sorted(type_names), *sorted(region_names)):
-            for channel in channels_by_name.get(name, []):
-                try:
-                    await channel.send(ctx.author.mention)
-                except (discord.Forbidden, discord.HTTPException):
-                    LOGGER.warning(
-                        "Could not send grind-support event ping to channel %s",
-                        channel.id,
-                    )
-
     async def _clear_grind_support_event_pings(self, ctx):
         await db.execute(
             """
