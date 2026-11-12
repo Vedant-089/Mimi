@@ -80,12 +80,6 @@ ALL_TYPES = [t for t in TYPING_DATA.keys() if t != "???"]
 ALL_REGIONS = [r for r in REGION_DATA.keys() if r != "???"]
 TYPE_KEYS_BY_CASEFOLD = {name.casefold(): name for name in ALL_TYPES}
 REGION_KEYS_BY_CASEFOLD = {name.casefold(): name for name in ALL_REGIONS}
-SPAWN_COPY_COMMAND_RE = re.compile(
-    r"Copy-Command:\s*`@Pokétwo#8236\s+c\s+([^`\s]+)`",
-    re.IGNORECASE,
-)
-
-
 def get_pokemons_for_types(selected_types):
     pokes = set()
     for t in selected_types:
@@ -971,10 +965,7 @@ class TypeRegionPings(commands.Cog):
             region_requirements,
             replace_types=True,
         )
-        await ctx.send(
-            "🔎 Event quests saved. Searching this server for matching unclaimed spawns..."
-        )
-        backfilled = await self._backfill_existing_spawns(
+        backfilled = await self._notify_existing_grind_support_channels(
             ctx,
             type_requirements,
             region_requirements,
@@ -982,148 +973,85 @@ class TypeRegionPings(commands.Cog):
         await ctx.send(
             "✅ Grind support event pings started — "
             f"{len(new_types)} type and {len(new_regions)} region quest(s)."
-            + (f" Backfilled {backfilled} matching spawn(s)." if backfilled else "")
+            + (f" Sent {backfilled} quota-limited channel ping(s)." if backfilled else "")
         )
 
-    async def _backfill_existing_spawns(
+    async def _notify_existing_grind_support_channels(
         self,
         ctx,
         type_requirements: dict[str, int],
         region_requirements: dict[str, int],
     ) -> int:
-        """Ping this user for matching, unclaimed spawn responses in this guild."""
-        bot_user_id = getattr(self.bot.user, "id", None)
-        if bot_user_id is None:
-            print("[m!ev] backfill skipped: bot user is not ready")
-            return 0
-
-        type_lookup = {
-            type_name: {name.casefold().strip() for name in pokemon_names}
-            for type_name, pokemon_names in TYPING_DATA.items()
-        }
-        region_lookup = {
-            region_name: {name.casefold().strip() for name in pokemon_names}
-            for region_name, pokemon_names in REGION_DATA.items()
-        }
-
+        """Ping saved type/region channels, capped by each quest's remaining count."""
         async with _QUEST_STATE_LOCK:
-            channel_data = await asyncio.to_thread(self._read_type_channel_data)
-            relevant_names = set(type_requirements) | set(region_requirements)
-            channel_ids = {
-                int(channel_id)
-                for name, saved_ids in channel_data.items()
-                if name.casefold() in relevant_names
-                and isinstance(saved_ids, list)
-                for channel_id in saved_ids
-                if str(channel_id).isdigit()
+            channel_data = {
+                str(name).casefold(): saved_ids
+                for name, saved_ids in (
+                    await asyncio.to_thread(self._read_type_channel_data)
+                ).items()
             }
-            print(
-                f"[m!ev] targeted channel count={len(channel_ids)} "
-                f"for names={sorted(relevant_names)}"
-            )
-            messages = []
-            for channel_id in channel_ids:
-                channel = ctx.guild.get_channel(channel_id) or self.bot.get_channel(
-                    channel_id
-                )
-                if channel is None or getattr(channel, "guild", None) != ctx.guild:
-                    print(f"[m!ev] saved channel unavailable channel={channel_id}")
-                    continue
-                print(f"[m!ev] scanning channel={channel.id} name={channel.name!r}")
-                try:
-                    async for message in channel.history(limit=None):
-                        if message.author.id != bot_user_id:
-                            continue
-                        match = SPAWN_COPY_COMMAND_RE.search(message.content or "")
-                        if match:
-                            messages.append(
-                                (message.id, message, match.group(1).casefold())
-                            )
-                except (discord.Forbidden, discord.HTTPException):
-                    LOGGER.warning(
-                        "Could not scan spawn history in channel %s",
-                        channel.id,
-                    )
-                    print(f"[m!ev] could not scan channel={channel.id}")
-
-            print(f"[m!ev] found {len(messages)} candidate spawn responses")
-            messages.sort(key=lambda item: item[0])
             backfilled = 0
-            for message_id, message, pokemon_name in messages:
-                already_claimed = await db.fetchval(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM grind_support
-                        WHERE userid = $1 AND spawn_order = $2
-                    )
-                    """,
-                    ctx.author.id,
-                    message_id,
-                )
-                if already_claimed:
-                    continue
 
-                pokemon_types = [
-                    type_name
-                    for type_name, pokemon_names in type_lookup.items()
-                    if pokemon_name in pokemon_names
-                ]
-                pokemon_regions = [
-                    region_name
-                    for region_name, pokemon_names in region_lookup.items()
-                    if pokemon_name in pokemon_names
-                ]
-                if not (
-                    set(pokemon_types) & set(type_requirements)
-                    or set(pokemon_regions) & set(region_requirements)
-                ):
-                    continue
+            for kind, requirements in (
+                ("type", type_requirements),
+                ("region", region_requirements),
+            ):
+                for name, needed in requirements.items():
+                    saved_ids = channel_data.get(name, [])
+                    if not isinstance(saved_ids, list):
+                        continue
 
-                type_users, region_users = await limit_quest_ping_users(
-                    ctx.guild.id,
-                    {ctx.author.id},
-                    db,
-                    [ctx.author.id],
-                    [ctx.author.id],
-                    pokemon_types,
-                    pokemon_regions,
-                    require_matching_quest=True,
-                )
-                if not type_users and not region_users:
-                    continue
+                    sent = 0
+                    for channel_id in dict.fromkeys(saved_ids):
+                        if sent >= needed:
+                            break
+                        try:
+                            channel = ctx.guild.get_channel(int(channel_id))
+                        except (TypeError, ValueError):
+                            continue
+                        if channel is None:
+                            continue
+                        if kind == "type":
+                            type_users, _ = await limit_quest_ping_users(
+                                ctx.guild.id,
+                                {ctx.author.id},
+                                db,
+                                [ctx.author.id],
+                                [],
+                                [name],
+                                [],
+                                require_matching_quest=True,
+                            )
+                        else:
+                            _, region_users = await limit_quest_ping_users(
+                                ctx.guild.id,
+                                {ctx.author.id},
+                                db,
+                                [],
+                                [ctx.author.id],
+                                [],
+                                [name],
+                                require_matching_quest=True,
+                            )
+                        if not (type_users if kind == "type" else region_users):
+                            break
 
-                try:
-                    await message.channel.send(ctx.author.mention)
-                except (discord.Forbidden, discord.HTTPException):
-                    LOGGER.exception(
-                        "Could not send backfill ping in channel %s",
-                        message.channel.id,
-                    )
-                    print(
-                        f"[m!ev] failed to send backfill ping "
-                        f"channel={message.channel.id} message={message.id}"
-                    )
-                    continue
-                await db.execute(
-                    """
-                    INSERT INTO grind_support (
-                        guildid, channelid, messageid, pokemon_name, userid, spawn_order
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $3)
-                    ON CONFLICT (userid, spawn_order) DO NOTHING
-                    """,
-                    ctx.guild.id,
-                    message.channel.id,
-                    message.id,
-                    pokemon_name,
-                    ctx.author.id,
-                )
-                backfilled += 1
-                print(
-                    f"[m!ev] backfilled pokemon={pokemon_name} "
-                    f"message={message_id} count={backfilled}"
-                )
+                        try:
+                            await channel.send(ctx.author.mention)
+                        except (discord.Forbidden, discord.HTTPException):
+                            LOGGER.warning(
+                                "Could not send %s quest ping in channel %s",
+                                kind,
+                                channel.id,
+                            )
+                            continue
+
+                        sent += 1
+                        backfilled += 1
+                        print(
+                            f"[m!ev] sent {kind} ping name={name} "
+                            f"channel={channel.id} count={sent}/{needed}"
+                        )
 
             return backfilled
 
