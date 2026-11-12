@@ -5,9 +5,11 @@ from types import SimpleNamespace
 import functions
 from commands.tp_qp import (
     UNKNOWN_GENDER_POKEMON,
+    TypeRegionPings,
     build_ping_payload,
     get_pokemons_for_regions,
     get_pokemons_for_types,
+    matching_saved_channel_ids,
     parse_event_quests,
     parse_quest_pings,
     remove_completed_quests,
@@ -249,6 +251,74 @@ def test_grind_support_limits_overlapping_type_and_region_pings():
 
     assert results[:18] == [([2], [2])] * 18
     assert results[18] == ([], [])
+
+
+def test_matching_saved_channel_ids_dedupes_current_quest_channels():
+    channel_data = {
+        "Dark": [11, "12", 11],
+        "sinnoh": [12, 13],
+        "water": [99],
+    }
+
+    assert matching_saved_channel_ids(channel_data, ["dark", "Sinnoh"]) == [11, 12, 13]
+
+
+def test_grind_support_notify_pings_visible_guild_channels_once():
+    class FakeChannel:
+        def __init__(self, channel_id, guild):
+            self.id = channel_id
+            self.guild = guild
+            self.sent = []
+
+        async def send(self, content):
+            self.sent.append(content)
+
+    class FakeGuild:
+        def __init__(self, guild_id):
+            self.id = guild_id
+            self.channels = {}
+
+        def get_channel(self, channel_id):
+            return self.channels.get(channel_id)
+
+        def get_thread(self, channel_id):
+            return None
+
+    class FakeBot:
+        def __init__(self):
+            self.channels = {}
+
+        def get_channel(self, channel_id):
+            return self.channels.get(channel_id)
+
+    guild = FakeGuild(1)
+    other_guild = FakeGuild(2)
+    local_channel = FakeChannel(11, guild)
+    thread_channel = FakeChannel(12, guild)
+    foreign_channel = FakeChannel(99, other_guild)
+    guild.channels[11] = local_channel
+
+    cog = TypeRegionPings.__new__(TypeRegionPings)
+    cog.bot = FakeBot()
+    cog.bot.channels[12] = thread_channel
+    cog.bot.channels[99] = foreign_channel
+    cog._read_type_channel_data = lambda: {
+        "dark": [11, 12, 99, 11],
+        "water": [100],
+    }
+    ctx = SimpleNamespace(
+        guild=guild,
+        author=SimpleNamespace(id=2, mention="<@2>"),
+    )
+
+    sent = asyncio.run(
+        cog._notify_existing_grind_support_channels(ctx, {"dark": 18}, {})
+    )
+
+    assert sent == 2
+    assert local_channel.sent == ["<@2>"]
+    assert thread_channel.sent == ["<@2>"]
+    assert foreign_channel.sent == []
 
 
 def test_grind_support_backfill_requires_a_matching_remaining_quest():

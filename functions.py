@@ -783,7 +783,6 @@ async def limit_quest_ping_users(
         return type_ping_users, region_ping_users
 
     async with _quest_requirements_lock:
-        await _load_quest_requirements_locked()
         completed_types = defaultdict(set)
         completed_regions = defaultdict(set)
         requirements_changed = False
@@ -985,6 +984,8 @@ async def update_grind_support_cache(server_id: int, user_id: int, enabled: bool
 
 
 async def warm_ping_caches(db_instance, server_ids=None):
+    async with _quest_requirements_lock:
+        await _load_quest_requirements_locked()
     await asyncio.gather(
         refresh_hunt_cache(db_instance, server_ids),
         refresh_collection_cache(db_instance),

@@ -13,7 +13,6 @@ from functions import (
     GRIND_SUPPORT_SERVER_IDS,
     get_grind_support_users,
     is_suspended,
-    limit_quest_ping_users,
     refresh_tp_qp_cache,
     set_quest_requirements,
 )
@@ -21,7 +20,7 @@ from functions import (
 LOGGER = logging.getLogger(__name__)
 QUEST_COMPLETION_BOT_ID = 716390085896962058
 QUEST_DATA_FILE = "quest_data.json"
-TYPE_CHANNELS_FILE = Path("type_channels.json")
+TYPE_CHANNELS_FILE = Path(__file__).resolve().parent.parent / "type_channels.json"
 _QUEST_STATE_LOCK = asyncio.Lock()
 _QUEST_FILE_LOCK = asyncio.Lock()
 
@@ -392,6 +391,35 @@ def build_ping_payload(names, key_name, pokemon_resolver):
         key_name: selected_names,
         "pokemons": pokemon_resolver(selected_names),
     })
+
+
+def matching_saved_channel_ids(channel_data, names) -> list[int]:
+    """Return unique type_channels.json IDs for the requested type/region names."""
+    if not isinstance(channel_data, dict):
+        return []
+
+    normalized = {
+        str(name).casefold(): saved_ids
+        for name, saved_ids in channel_data.items()
+    }
+    channel_ids = []
+    seen = set()
+    for name in names:
+        saved_ids = normalized.get(str(name).casefold(), [])
+        if isinstance(saved_ids, (int, str)):
+            saved_ids = [saved_ids]
+        if not isinstance(saved_ids, (list, tuple, set)):
+            continue
+        for channel_id in saved_ids:
+            try:
+                parsed_id = int(channel_id)
+            except (TypeError, ValueError):
+                continue
+            if parsed_id in seen:
+                continue
+            seen.add(parsed_id)
+            channel_ids.append(parsed_id)
+    return channel_ids
 
 
 def parse_ping_arguments(arguments, valid_names):
@@ -973,7 +1001,7 @@ class TypeRegionPings(commands.Cog):
         await ctx.send(
             "✅ Grind support event pings started — "
             f"{len(new_types)} type and {len(new_regions)} region quest(s)."
-            + (f" Sent {backfilled} quota-limited channel ping(s)." if backfilled else "")
+            + (f" Pinged {backfilled} matching spawn channel(s)." if backfilled else "")
         )
 
     async def _notify_existing_grind_support_channels(
@@ -982,119 +1010,81 @@ class TypeRegionPings(commands.Cog):
         type_requirements: dict[str, int],
         region_requirements: dict[str, int],
     ) -> int:
-        """Ping saved type/region channels, capped by each quest's remaining count."""
-        async with _QUEST_STATE_LOCK:
-            channel_data = {
-                str(name).casefold(): saved_ids
-                for name, saved_ids in (
-                    await asyncio.to_thread(self._read_type_channel_data)
-                ).items()
-            }
-            relevant_names = set(type_requirements) | set(region_requirements)
-            saved_channel_ids = {
-                int(channel_id)
-                for name in relevant_names
-                for channel_id in channel_data.get(name, [])
-                if str(channel_id).isdigit()
-            }
-            if not saved_channel_ids:
-                return 0
+        """Ping each matching saved channel once in the current guild.
 
-            rows = await db.fetch(
-                """
-                SELECT spawn.spawn_order, spawn.channelid, spawn.pokemon_name
-                FROM grind_support_spawns AS spawn
-                WHERE spawn.guildid = $1
-                  AND spawn.channelid = ANY($2::bigint[])
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM grind_support AS claimed
-                      WHERE claimed.userid = $3
-                        AND claimed.spawn_order = spawn.spawn_order
-                  )
-                ORDER BY spawn.spawn_order
-                """,
-                ctx.guild.id,
-                list(saved_channel_ids),
-                ctx.author.id,
+        Channel IDs come from type_channels.json, not historical spawn rows.
+        Quotas are consumed by actual Pokémon spawns in the spawn handler,
+        not by this setup notification.
+        """
+        channel_data = await asyncio.to_thread(self._read_type_channel_data)
+        saved_channel_ids = matching_saved_channel_ids(
+            channel_data,
+            (*type_requirements, *region_requirements),
+        )
+        sent_count = 0
+        unresolved = 0
+        for channel_id in saved_channel_ids:
+            channel = self._resolve_guild_channel(ctx.guild, channel_id)
+            if channel is None:
+                unresolved += 1
+                continue
+            try:
+                await channel.send(ctx.author.mention)
+            except (discord.Forbidden, discord.HTTPException):
+                LOGGER.warning(
+                    "Could not send grind-support event ping to channel %s",
+                    channel.id,
+                )
+                continue
+            sent_count += 1
+            print(
+                f"[m!ev] sent one channel ping channel={channel.id} "
+                f"types={sorted(type_requirements)} "
+                f"regions={sorted(region_requirements)}"
             )
 
-            type_lookup = {
-                type_name: {name.casefold().strip() for name in pokemon_names}
-                for type_name, pokemon_names in TYPING_DATA.items()
-            }
-            region_lookup = {
-                region_name: {name.casefold().strip() for name in pokemon_names}
-                for region_name, pokemon_names in REGION_DATA.items()
-            }
-            backfilled = 0
+        print(
+            f"[m!ev] channel notify guild={ctx.guild.id} user={ctx.author.id} "
+            f"saved={len(saved_channel_ids)} sent={sent_count} "
+            f"unresolved={unresolved} file={TYPE_CHANNELS_FILE}"
+        )
+        if saved_channel_ids and sent_count == 0:
+            LOGGER.warning(
+                "Grind-support event found %s saved channel id(s) for %s/%s "
+                "but none were visible in guild %s",
+                len(saved_channel_ids),
+                sorted(type_requirements),
+                sorted(region_requirements),
+                ctx.guild.id,
+            )
+        return sent_count
 
-            for row in rows:
-                pokemon_name = row["pokemon_name"].casefold().strip()
-                pokemon_types = [
-                    type_name
-                    for type_name, pokemon_names in type_lookup.items()
-                    if pokemon_name in pokemon_names
-                ]
-                pokemon_regions = [
-                    region_name
-                    for region_name, pokemon_names in region_lookup.items()
-                    if pokemon_name in pokemon_names
-                ]
-                type_users, region_users = await limit_quest_ping_users(
-                    ctx.guild.id,
-                    {ctx.author.id},
-                    db,
-                    [ctx.author.id],
-                    [ctx.author.id],
-                    pokemon_types,
-                    pokemon_regions,
-                    require_matching_quest=True,
-                )
-                if not type_users and not region_users:
-                    continue
-
-                channel = ctx.guild.get_channel(row["channelid"])
-                if channel is None:
-                    continue
-                try:
-                    await channel.send(ctx.author.mention)
-                except (discord.Forbidden, discord.HTTPException):
-                    LOGGER.warning(
-                        "Could not send quest ping in channel %s",
-                        channel.id,
-                    )
-                    continue
-
-                await db.execute(
-                    """
-                    INSERT INTO grind_support (
-                        guildid, channelid, messageid, pokemon_name, userid, spawn_order
-                    )
-                    VALUES ($1, $2, NULL, $3, $4, $5)
-                    ON CONFLICT (userid, spawn_order) DO NOTHING
-                    """,
-                    ctx.guild.id,
-                    channel.id,
-                    pokemon_name,
-                    ctx.author.id,
-                    row["spawn_order"],
-                )
-                backfilled += 1
-                print(
-                    f"[m!ev] sent one ping pokemon={pokemon_name} "
-                    f"channel={channel.id} types={pokemon_types} "
-                    f"regions={pokemon_regions}"
-                )
-
-            return backfilled
+    def _resolve_guild_channel(self, guild, channel_id: int):
+        getter = getattr(guild, "get_channel_or_thread", None)
+        channel = getter(channel_id) if getter else None
+        if channel is None:
+            channel = guild.get_channel(channel_id)
+        if channel is None:
+            get_thread = getattr(guild, "get_thread", None)
+            if get_thread:
+                channel = get_thread(channel_id)
+        if channel is None:
+            channel = self.bot.get_channel(channel_id)
+        channel_guild = getattr(channel, "guild", None)
+        if channel is None or channel_guild is None or channel_guild.id != guild.id:
+            return None
+        return channel
 
     @staticmethod
     def _read_type_channel_data():
         try:
             with TYPE_CHANNELS_FILE.open("r", encoding="utf-8") as file:
                 data = json.load(file)
+        except FileNotFoundError:
+            LOGGER.warning("type_channels.json was not found at %s", TYPE_CHANNELS_FILE)
+            return {}
         except (OSError, json.JSONDecodeError):
+            LOGGER.exception("Failed to read type channel map from %s", TYPE_CHANNELS_FILE)
             return {}
         if not isinstance(data, dict):
             return {}
