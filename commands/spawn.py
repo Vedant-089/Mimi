@@ -913,6 +913,10 @@ class SpawnPredictor(commands.Cog):
             if naming_enabled:
                 reply_lines.append(f"{display_name}: {confidence:.2%}")
 
+            quest_ping_users = list(
+                dict.fromkeys(type_ping_users + region_ping_users)
+            )
+
             # ==================================================
             # RESERVE OVERRIDE
             #
@@ -961,21 +965,12 @@ class SpawnPredictor(commands.Cog):
                         )
                     )
 
-                if type_ping_users:
+                if quest_ping_users:
                     reply_lines.append(
-                        "Type Pings: "
+                        "Type/Region Quest Pings: "
                         + ", ".join(
                             f"<@{uid}>"
-                            for uid in type_ping_users
-                        )
-                    )
-
-                if region_ping_users:
-                    reply_lines.append(
-                        "Region Pings: "
-                        + ", ".join(
-                            f"<@{uid}>"
-                            for uid in region_ping_users
+                            for uid in quest_ping_users
                         )
                     )
 
