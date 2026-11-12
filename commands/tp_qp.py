@@ -1010,23 +1010,39 @@ class TypeRegionPings(commands.Cog):
         if not matched_types and not matched_regions:
             return
 
-        type_users, region_users = await limit_quest_ping_users(
+        await limit_quest_ping_users(
             ctx.guild.id,
             {ctx.author.id},
             db,
-            [ctx.author.id] if matched_types else [],
-            [ctx.author.id] if matched_regions else [],
+            [ctx.author.id],
+            [ctx.author.id],
             sorted(matched_types),
             sorted(matched_regions),
         )
-        allowed_types = bool(type_users)
-        allowed_regions = bool(region_users)
+
+        row = await db.fetchrow(
+            """
+            SELECT type_pings, region_pings
+            FROM tp_qp
+            WHERE serverid = $1 AND userid = $2
+            """,
+            ctx.guild.id,
+            ctx.author.id,
+        )
+        active_types = parse_user_enabled_keys(
+            row["type_pings"] if row else None,
+            "types",
+        )
+        active_regions = parse_user_enabled_keys(
+            row["region_pings"] if row else None,
+            "regions",
+        )
         channels_to_ping = set()
         for name in matched_types:
-            if allowed_types:
+            if name in active_types:
                 channels_to_ping.update(channels_by_type.get(name, set()))
         for name in matched_regions:
-            if allowed_regions:
+            if name in active_regions:
                 channels_to_ping.update(channels_by_type.get(name, set()))
 
         for channel in channels_to_ping:
