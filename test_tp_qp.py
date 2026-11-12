@@ -1,5 +1,8 @@
+import asyncio
+import json
 from types import SimpleNamespace
 
+import functions
 from commands.tp_qp import (
     UNKNOWN_GENDER_POKEMON,
     build_ping_payload,
@@ -183,3 +186,66 @@ def test_remove_completed_quest_removes_queued_inactive_quests():
 
     assert remove_completed_quests(state, "B1") is True
     assert [quest["code"] for quest in state["quests"]] == ["a4"]
+
+
+class _QuestPingDB:
+    def __init__(self, server_id):
+        self.server_id = server_id
+        self.payloads = {
+            "type_pings": json.dumps({
+                "types": ["dark"],
+                "pokemons": ["dark-pokemon"],
+            }),
+            "region_pings": json.dumps({
+                "regions": ["sinnoh"],
+                "pokemons": ["sinnoh-pokemon"],
+            }),
+        }
+
+    async def fetchrow(self, query, server_id, user_id):
+        key = "type_pings" if "type_pings" in query else "region_pings"
+        return {key: self.payloads[key]}
+
+    async def execute(self, query, server_id, user_id, payload):
+        key = "type_pings" if "type_pings" in query else "region_pings"
+        self.payloads[key] = payload
+
+    async def fetch(self, query):
+        return [{
+            "serverid": self.server_id,
+            "userid": 2,
+            "type_pings": self.payloads["type_pings"],
+            "region_pings": self.payloads["region_pings"],
+        }]
+
+
+def test_grind_support_limits_overlapping_type_and_region_pings():
+    async def exercise():
+        server_id = next(iter(functions.GRIND_SUPPORT_SERVER_IDS))
+        db = _QuestPingDB(server_id)
+        async with functions._quest_requirements_lock:
+            functions._quest_requirements.clear()
+            functions._quest_requirements[(server_id, 2)] = {
+                "types": {"dark": 18},
+                "regions": {"sinnoh": 18},
+            }
+
+        results = []
+        for _ in range(19):
+            results.append(
+                await functions.limit_quest_ping_users(
+                    server_id,
+                    {2},
+                    db,
+                    [2],
+                    [2],
+                    ["dark"],
+                    ["sinnoh"],
+                )
+            )
+        return results
+
+    results = asyncio.run(exercise())
+
+    assert results[:18] == [([2], [2])] * 18
+    assert results[18] == ([], [])

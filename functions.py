@@ -175,6 +175,14 @@ with open("typing.json", "r", encoding="utf-8") as _typing_file:
         }
         for type_name, pokemon_names in json.load(_typing_file).items()
     }
+with open("region.json", "r", encoding="utf-8") as _region_file:
+    _region_pokemon_names = {
+        region_name: {
+            pokemon_name.lower().strip()
+            for pokemon_name in pokemon_names
+        }
+        for region_name, pokemon_names in json.load(_region_file).items()
+    }
 _server_settings_cache = {}
 _server_settings_cache_lock = asyncio.Lock()
 PING_TABLES_SQL = [
@@ -681,6 +689,7 @@ async def set_quest_requirements(
         requirements = _quest_requirements[(server_id, user_id)]
         if replace_types:
             requirements["types"].clear()
+            requirements["regions"].clear()
         for quest_type, remaining in type_requirements.items():
             requirements["types"][quest_type] = max(0, remaining)
         for region, remaining in region_requirements.items():
@@ -701,6 +710,7 @@ async def limit_quest_ping_users(
 
     async with _quest_requirements_lock:
         completed_types = defaultdict(set)
+        completed_regions = defaultdict(set)
         limited_type_users = []
         for user_id in type_ping_users:
             if user_id not in grind_support_users:
@@ -746,6 +756,8 @@ async def limit_quest_ping_users(
                     for region in pokemon_regions:
                         if requirements["regions"].get(region, 0) > 0:
                             requirements["regions"][region] -= 1
+                            if requirements["regions"][region] == 0:
+                                completed_regions[user_id].add(region)
 
         changed_type_pings = False
         for user_id, type_names in completed_types.items():
@@ -793,6 +805,54 @@ async def limit_quest_ping_users(
             changed_type_pings = True
 
         if changed_type_pings:
+            await refresh_tp_qp_cache(db_instance)
+
+        changed_region_pings = False
+        for user_id, region_names in completed_regions.items():
+            row = await db_instance.fetchrow(
+                """
+                SELECT region_pings
+                FROM tp_qp
+                WHERE serverid = $1 AND userid = $2
+                """,
+                server_id,
+                user_id,
+            )
+            if not row or not row["region_pings"]:
+                continue
+            try:
+                payload = json.loads(row["region_pings"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+
+            active_regions = {
+                str(region_name).casefold()
+                for region_name in payload.get("regions", [])
+            }
+            remaining_regions = active_regions - region_names
+            payload["regions"] = sorted(remaining_regions)
+            payload["pokemons"] = sorted(
+                {
+                    pokemon_name
+                    for region_name in remaining_regions
+                    for pokemon_name in _region_pokemon_names.get(region_name, set())
+                }
+            )
+            await db_instance.execute(
+                """
+                UPDATE tp_qp
+                SET region_pings = $3
+                WHERE serverid = $1 AND userid = $2
+                """,
+                server_id,
+                user_id,
+                json.dumps(payload),
+            )
+            changed_region_pings = True
+
+        if changed_region_pings:
             await refresh_tp_qp_cache(db_instance)
 
     return limited_type_users, limited_region_users

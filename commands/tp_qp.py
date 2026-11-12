@@ -5,6 +5,7 @@ import asyncio
 import csv
 import os
 from copy import deepcopy
+from pathlib import Path
 import discord
 from discord.ext import commands
 from database import db
@@ -14,11 +15,13 @@ from functions import (
     is_suspended,
     refresh_tp_qp_cache,
     set_quest_requirements,
+    limit_quest_ping_users,
 )
 
 LOGGER = logging.getLogger(__name__)
 QUEST_COMPLETION_BOT_ID = 716390085896962058
 QUEST_DATA_FILE = "quest_data.json"
+TYPE_CHANNELS_FILE = Path("type_channels.json")
 _QUEST_STATE_LOCK = asyncio.Lock()
 _QUEST_FILE_LOCK = asyncio.Lock()
 
@@ -955,10 +958,85 @@ class TypeRegionPings(commands.Cog):
             region_requirements,
             replace_types=True,
         )
+        await self._ping_existing_grind_support_channels(
+            ctx,
+            new_types,
+            new_regions,
+        )
         await ctx.send(
             "✅ Grind support event pings started — "
             f"{len(new_types)} type and {len(new_regions)} region quest(s)."
         )
+
+    @staticmethod
+    def _read_type_channel_data():
+        try:
+            with TYPE_CHANNELS_FILE.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return data
+
+    async def _ping_existing_grind_support_channels(
+        self,
+        ctx,
+        type_names: set[str],
+        region_names: set[str],
+    ):
+        channel_data = await asyncio.to_thread(self._read_type_channel_data)
+        matched_types = set()
+        matched_regions = set()
+        channels_by_type = {}
+
+        for name in type_names | region_names:
+            channel_ids = channel_data.get(name, [])
+            if not isinstance(channel_ids, list):
+                continue
+            for channel_id in channel_ids:
+                try:
+                    channel = ctx.guild.get_channel(int(channel_id))
+                except (TypeError, ValueError):
+                    continue
+                if channel is None:
+                    continue
+                channels_by_type.setdefault(name, set()).add(channel)
+                if name in type_names:
+                    matched_types.add(name)
+                if name in region_names:
+                    matched_regions.add(name)
+
+        if not matched_types and not matched_regions:
+            return
+
+        type_users, region_users = await limit_quest_ping_users(
+            ctx.guild.id,
+            {ctx.author.id},
+            db,
+            [ctx.author.id] if matched_types else [],
+            [ctx.author.id] if matched_regions else [],
+            sorted(matched_types),
+            sorted(matched_regions),
+        )
+        allowed_types = bool(type_users)
+        allowed_regions = bool(region_users)
+        channels_to_ping = set()
+        for name in matched_types:
+            if allowed_types:
+                channels_to_ping.update(channels_by_type.get(name, set()))
+        for name in matched_regions:
+            if allowed_regions:
+                channels_to_ping.update(channels_by_type.get(name, set()))
+
+        for channel in channels_to_ping:
+            try:
+                await channel.send(ctx.author.mention)
+            except (discord.Forbidden, discord.HTTPException):
+                LOGGER.warning(
+                    "Could not send grind-support catch-up ping to channel %s",
+                    channel.id,
+                )
 
     async def _clear_grind_support_event_pings(self, ctx):
         await db.execute(
