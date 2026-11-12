@@ -13,6 +13,7 @@ from functions import (
     GRIND_SUPPORT_SERVER_IDS,
     get_grind_support_users,
     is_suspended,
+    limit_quest_ping_users,
     refresh_tp_qp_cache,
     set_quest_requirements,
 )
@@ -79,6 +80,10 @@ ALL_TYPES = [t for t in TYPING_DATA.keys() if t != "???"]
 ALL_REGIONS = [r for r in REGION_DATA.keys() if r != "???"]
 TYPE_KEYS_BY_CASEFOLD = {name.casefold(): name for name in ALL_TYPES}
 REGION_KEYS_BY_CASEFOLD = {name.casefold(): name for name in ALL_REGIONS}
+SPAWN_COPY_COMMAND_RE = re.compile(
+    r"Copy-Command:\s*`@Pokétwo#8236\s+c\s+([^`\s]+)`",
+    re.IGNORECASE,
+)
 
 
 def get_pokemons_for_types(selected_types):
@@ -957,15 +962,119 @@ class TypeRegionPings(commands.Cog):
             region_requirements,
             replace_types=True,
         )
-        await self._notify_existing_grind_support_channels(
+        backfilled = await self._backfill_existing_spawns(
             ctx,
-            new_types,
-            new_regions,
+            type_requirements,
+            region_requirements,
         )
         await ctx.send(
             "✅ Grind support event pings started — "
             f"{len(new_types)} type and {len(new_regions)} region quest(s)."
+            + (f" Backfilled {backfilled} matching spawn(s)." if backfilled else "")
         )
+
+    async def _backfill_existing_spawns(
+        self,
+        ctx,
+        type_requirements: dict[str, int],
+        region_requirements: dict[str, int],
+    ) -> int:
+        """Ping this user for matching, unclaimed spawn responses in this guild."""
+        bot_user_id = getattr(self.bot.user, "id", None)
+        if bot_user_id is None:
+            return 0
+
+        type_lookup = {
+            type_name: {name.casefold().strip() for name in pokemon_names}
+            for type_name, pokemon_names in TYPING_DATA.items()
+        }
+        region_lookup = {
+            region_name: {name.casefold().strip() for name in pokemon_names}
+            for region_name, pokemon_names in REGION_DATA.items()
+        }
+
+        async with _QUEST_STATE_LOCK:
+            messages = []
+            for channel in ctx.guild.text_channels:
+                try:
+                    async for message in channel.history(limit=None):
+                        if message.author.id != bot_user_id:
+                            continue
+                        match = SPAWN_COPY_COMMAND_RE.search(message.content or "")
+                        if match:
+                            messages.append(
+                                (message.id, message, match.group(1).casefold())
+                            )
+                except (discord.Forbidden, discord.HTTPException):
+                    LOGGER.warning(
+                        "Could not scan spawn history in channel %s",
+                        channel.id,
+                    )
+
+            messages.sort(key=lambda item: item[0])
+            backfilled = 0
+            for message_id, message, pokemon_name in messages:
+                already_claimed = await db.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM grind_support
+                        WHERE userid = $1 AND spawn_order = $2
+                    )
+                    """,
+                    ctx.author.id,
+                    message_id,
+                )
+                if already_claimed:
+                    continue
+
+                pokemon_types = [
+                    type_name
+                    for type_name, pokemon_names in type_lookup.items()
+                    if pokemon_name in pokemon_names
+                ]
+                pokemon_regions = [
+                    region_name
+                    for region_name, pokemon_names in region_lookup.items()
+                    if pokemon_name in pokemon_names
+                ]
+                if not (
+                    set(pokemon_types) & set(type_requirements)
+                    or set(pokemon_regions) & set(region_requirements)
+                ):
+                    continue
+
+                type_users, region_users = await limit_quest_ping_users(
+                    ctx.guild.id,
+                    {ctx.author.id},
+                    db,
+                    [ctx.author.id],
+                    [ctx.author.id],
+                    pokemon_types,
+                    pokemon_regions,
+                    require_matching_quest=True,
+                )
+                if not type_users and not region_users:
+                    continue
+
+                await message.channel.send(ctx.author.mention)
+                await db.execute(
+                    """
+                    INSERT INTO grind_support (
+                        guildid, channelid, messageid, pokemon_name, userid, spawn_order
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $3)
+                    ON CONFLICT (userid, spawn_order) DO NOTHING
+                    """,
+                    ctx.guild.id,
+                    message.channel.id,
+                    message.id,
+                    pokemon_name,
+                    ctx.author.id,
+                )
+                backfilled += 1
+
+            return backfilled
 
     @staticmethod
     def _read_type_channel_data():

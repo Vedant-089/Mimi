@@ -704,6 +704,7 @@ async def limit_quest_ping_users(
     region_ping_users: list[int],
     pokemon_types: list[str],
     pokemon_regions: list[str],
+    require_matching_quest: bool = False,
 ):
     if server_id not in GRIND_SUPPORT_SERVER_IDS or not grind_support_users:
         return type_ping_users, region_ping_users
@@ -726,6 +727,10 @@ async def limit_quest_ping_users(
                 if requirements
                 else []
             )
+            if require_matching_quest and not any(
+                remaining > 0 for remaining in type_remaining
+            ):
+                continue
             if not type_remaining or any(remaining > 0 for remaining in type_remaining):
                 limited_type_users.append(user_id)
                 if requirements:
@@ -750,6 +755,10 @@ async def limit_quest_ping_users(
                 if requirements
                 else []
             )
+            if require_matching_quest and not any(
+                remaining > 0 for remaining in region_remaining
+            ):
+                continue
             if not region_remaining or any(remaining > 0 for remaining in region_remaining):
                 limited_region_users.append(user_id)
                 if requirements:

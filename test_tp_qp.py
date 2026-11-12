@@ -249,3 +249,28 @@ def test_grind_support_limits_overlapping_type_and_region_pings():
 
     assert results[:18] == [([2], [2])] * 18
     assert results[18] == ([], [])
+
+
+def test_grind_support_backfill_requires_a_matching_remaining_quest():
+    async def exercise():
+        server_id = next(iter(functions.GRIND_SUPPORT_SERVER_IDS))
+        db = _QuestPingDB(server_id)
+        async with functions._quest_requirements_lock:
+            functions._quest_requirements.clear()
+            functions._quest_requirements[(server_id, 2)] = {
+                "types": {"dark": 1},
+                "regions": {},
+            }
+
+        return await functions.limit_quest_ping_users(
+            server_id,
+            {2},
+            db,
+            [2],
+            [2],
+            ["water"],
+            ["sinnoh"],
+            require_matching_quest=True,
+        )
+
+    assert asyncio.run(exercise()) == ([], [])
