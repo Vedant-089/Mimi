@@ -56,23 +56,23 @@
     "fairy arceus"
   ],
   "silvally": [
-    "silvally bug",
-    "silvally dark",
-    "silvally dragon",
-    "silvally electric",
-    "silvally fairy",
-    "silvally fighting",
-    "silvally fire",
-    "silvally flying",
-    "silvally ghost",
-    "silvally grass",
-    "silvally ground",
-    "silvally ice",
-    "silvally poison",
-    "silvally psychic",
-    "silvally rock",
-    "silvally steel",
-    "silvally water"
+    "bug silvally",
+    "dark silvally",
+    "dragon silvally",
+    "electric silvally",
+    "fairy silvally",
+    "fighting silvally",
+    "fire silvally",
+    "flying silvally",
+    "ghost silvally",
+    "grass silvally",
+    "ground silvally",
+    "ice silvally",
+    "poison silvally",
+    "psychic silvally",
+    "rock silvally",
+    "steel silvally",
+    "water silvally"
   ],
   "xerneas": [
     "neutral xerneas"
@@ -108,7 +108,7 @@
     "unown question"
   ],
   "pichu": [
-    "spikey eared pichu"
+    "spiky-eared pichu"
   ],
   "zigzagoon": [
     "galarian zigzagoon"
@@ -291,7 +291,7 @@
     "rotom drone"
   ],
   "oricorio": [
-    "pom pom oricorio",
+    "pom-pom oricorio",
     "pau oricorio",
     "sensu oricorio"
   ],
@@ -325,8 +325,7 @@
     "gliding build koraidon"
   ],
   "urshifu": [
-    "single strike style urshifu",
-    "rapid strike style urshifu"
+    "rapid strike urshifu"
   ],
   "ogerpon": [
     "cornerstone mask ogerpon",
@@ -339,6 +338,94 @@
   "cyclizar": [
     "ride cyclizar",
     "battle cyclizar"
+  ],
+  "tatsugiri": [
+    "droopy tatsugiri",
+    "strecthy tatsugiri"
+  ],
+  "castform": [
+    "sunny castform",
+    "rainy castform",
+    "snowy castform"
+  ],
+  "burmy": [
+    "sandy burmy",
+    "trash burmy"
+  ],
+  "wormadam": [
+    "sandy wormadam",
+    "trash wormadam"
+  ],
+  "squawkabilly": [
+    "Blue Plumage squawkabilly",
+    "Yellow Plumage squawkabilly",
+    "White Plumage squawkabilly"
+  ],
+  "basculin": [
+    "blue-striped basculin",
+    "white-striped basculin"
+  ],
+  "deerling": [
+    "summer deerling",
+    "autumn deerling",
+    "winter deerling"
+  ],
+  "genesect": [
+    "high-speed flight configuration genesect"
+  ],
+  "Deoxys": [
+    "attack deoxys",
+    "defense deoxys",
+    "speed deoxys"
+  ],
+  "zygarde": [
+    "10% zygarde",
+    "zygarde cell",
+    "zygarde core",
+    "complete zygarde"
+  ],
+  "Lycanroc": [
+    "midnight lycanroc",
+    "dusk lycanroc"
+  ],
+  "wishiwashi": [
+    "school wishiwashi"
+  ],
+  "cramorant": [
+    "gulping cramorant",
+    "gorging cramorant"
+  ],
+  "amped toxtricity": [
+    "low key toxtricity"
+  ],
+  "eiscue": [
+    "noice face eiscue"
+  ],
+  "morpeko": [
+    "hangry morpeko"
+  ],
+  "cherrim": [
+    "sunshine cherrim"
+  ],
+  "shellos": [
+    "east sea shellos"
+  ],
+  "gastrodon": [
+    "east sea gastrodon"
+  ],
+  "palafin": [
+    "hero palafin"
+  ],
+  "dudunsparce": [
+    "three-segment dudunsparce"
+  ],
+  "gimmighoul": [
+    "roaming gimmighoul"
+  ],
+  "terapagos": [
+    "terastal terapagos"
+  ],
+  "marshadow": [
+    "zenith marshadow"
   ]
-
 }
