@@ -511,9 +511,21 @@ class ReserveCommands(commands.Cog):
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return None
 
+    EXCHANGE_LINE_PATTERN = re.compile(r"^<@!?(\d+)>\s*-?\s*(.+)$")
+    EXCHANGE_FORMAT_ERROR = (
+        "❌ Wrong format.\n"
+        "Use one of these:\n"
+        "`@user flareon`\n"
+        "`@user2 sylveon`\n"
+        "`@user- flareon` or `@user - flareon`\n"
+        "`@user2- sylveon` or `@user2 - sylveon`"
+    )
+
     async def parse_exchange_entries(self, ctx: commands.Context, message: discord.Message):
         entries = []
-        errors = []
+        format_error = False
+        invalid_pokemon = []
+        unknown_users = []
         mention_pattern = re.compile(r"<@!?(\d+)>")
         message_contents = []
         if message.content:
@@ -523,37 +535,19 @@ class ReserveCommands(commands.Cog):
             if snapshot_content:
                 message_contents.append(snapshot_content)
 
-        line_number = 0
         for content in message_contents:
             for line in content.splitlines():
-                line_number += 1
                 line = line.strip()
                 if not line:
                     continue
 
-                mentions = list(mention_pattern.finditer(line))
-                if len(mentions) != 1:
-                    errors.append(f"line {line_number}")
+                match = self.EXCHANGE_LINE_PATTERN.fullmatch(line)
+                if match is None or mention_pattern.search(match.group(2)):
+                    format_error = True
                     continue
 
-                mention = mentions[0]
-                if not line[:mention.start()].strip():
-                    source_id = int(mention.group(1))
-                    after_mention = line[mention.end():]
-                    separator = re.search(r"\s*-\s*", after_mention)
-                    if separator is None:
-                        errors.append(f"line {line_number}")
-                        continue
-                    pokemon_text = after_mention[separator.end():].strip()
-                else:
-                    source_id = int(mention.group(1))
-                    before_mention = line[:mention.start()]
-                    separator_index = before_mention.rfind("-")
-                    if separator_index < 0:
-                        errors.append(f"line {line_number}")
-                        continue
-                    pokemon_text = before_mention[:separator_index].strip()
-
+                source_id = int(match.group(1))
+                pokemon_text = match.group(2).strip()
                 source = ctx.guild.get_member(source_id)
                 if source is None:
                     try:
@@ -561,18 +555,18 @@ class ReserveCommands(commands.Cog):
                     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                         source = None
                 if source is None:
-                    errors.append(f"line {line_number}")
+                    unknown_users.append(str(source_id))
                     continue
 
                 input_names = [name.strip().lower() for name in pokemon_text.split(",") if name.strip()]
                 valid_names, invalid_names = expand_reserve_inputs(input_names)
                 if invalid_names or not valid_names:
-                    errors.append(f"line {line_number}")
+                    invalid_pokemon.extend(invalid_names or [pokemon_text])
                     continue
 
                 entries.extend((source, pokemon_name) for pokemon_name in valid_names)
 
-        return entries, errors
+        return entries, format_error, invalid_pokemon, unknown_users
 
     async def transfer_reserves(self, ctx: commands.Context, source: discord.Member, target: discord.Member, pokemon_names=None):
         if source.id == target.id:
@@ -657,11 +651,20 @@ class ReserveCommands(commands.Cog):
 
         referenced_message = await self.get_referenced_message(ctx)
         if referenced_message is None:
-            return await ctx.send("❌ Reply to or forward a message containing `@user - pokemon` before using this command.")
+            return await ctx.send(
+                "❌ Reply to or forward a list before using this command.\n"
+                f"{self.EXCHANGE_FORMAT_ERROR}"
+            )
 
-        entries, errors = await self.parse_exchange_entries(ctx, referenced_message)
-        if errors:
-            return await ctx.send(f"❌ Could not read the exchange format on {', '.join(errors)}. Use `@user - pokemon` or `pokemon - @user`.")
+        entries, format_error, invalid_pokemon, unknown_users = await self.parse_exchange_entries(
+            ctx, referenced_message
+        )
+        if format_error:
+            return await ctx.send(self.EXCHANGE_FORMAT_ERROR)
+        if invalid_pokemon:
+            return await ctx.send(f"❌ Invalid Pokémon: {', '.join(invalid_pokemon)}")
+        if unknown_users:
+            return await ctx.send("❌ Could not find one or more mentioned users in this server.")
         if not entries:
             return await ctx.send("❌ The replied message contains no exchange entries.")
 
