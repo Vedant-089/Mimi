@@ -176,6 +176,7 @@ PING_TABLES_SQL = [
         ping_reserves BOOLEAN NOT NULL DEFAULT TRUE,
         ping_type BOOLEAN NOT NULL DEFAULT TRUE,
         ping_region BOOLEAN NOT NULL DEFAULT TRUE,
+        copy_support BOOLEAN NOT NULL DEFAULT TRUE,
         main_starboard BIGINT,
         shiny_starboard BIGINT,
         gmax_starboard BIGINT
@@ -254,6 +255,9 @@ async def ensure_ping_tables(db_instance):
     await db_instance.execute(
         "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ping_region BOOLEAN NOT NULL DEFAULT TRUE;"
     )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS copy_support BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
 
 
 async def get_server_naming_enabled(server_id: int, db_instance) -> bool:
@@ -280,6 +284,7 @@ _DEFAULT_SPAWN_SETTINGS = {
     "ping_reserves": True,
     "ping_type": True,
     "ping_region": True,
+    "copy_support": True,
 }
 
 
@@ -308,7 +313,7 @@ async def get_server_spawn_settings(
         row = await db_instance.fetchrow(
             """
             SELECT naming, shiny_hunt_prio, ping_shiny, ping_collection,
-                   ping_reserves, ping_type, ping_region
+                   ping_reserves, ping_type, ping_region, copy_support
             FROM server_settings
             WHERE serverid = $1
             """,
@@ -325,7 +330,8 @@ async def refresh_server_settings_cache(db_instance):
             rows = await db_instance.fetch(
                 """
                 SELECT serverid, naming, shiny_hunt_prio, ping_shiny,
-                       ping_collection, ping_reserves, ping_type, ping_region
+                       ping_collection, ping_reserves, ping_type, ping_region,
+                       copy_support
                 FROM server_settings
                 """
             )

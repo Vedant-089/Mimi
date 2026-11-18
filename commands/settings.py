@@ -17,7 +17,7 @@ async def get_server_settings(server_id: int):
     return await db.fetchrow(
         """
         SELECT naming, shiny_hunt_prio, ping_shiny, ping_collection,
-               ping_reserves, ping_type, ping_region,
+               ping_reserves, ping_type, ping_region, copy_support,
                main_starboard, shiny_starboard, gmax_starboard
         FROM server_settings
         WHERE serverid = $1
@@ -97,12 +97,14 @@ class ServerSettingsView(discord.ui.LayoutView):
     async def naming(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
+        settings = await get_server_settings(self.server_id)
         await interaction.response.edit_message(
             view=NamingSettingsView(
                 self.author_id,
                 self.server_id,
-                self.naming_enabled,
-                self.shiny_hunt_prio,
+                settings["naming"],
+                settings["shiny_hunt_prio"],
+                settings["copy_support"],
             )
         )
 
@@ -152,12 +154,20 @@ class ServerSettings(commands.Cog):
 
 
 class NamingSettingsView(discord.ui.LayoutView):
-    def __init__(self, author_id: int, server_id: int, naming_enabled: bool = True, shiny_hunt_prio: bool = False):
+    def __init__(
+        self,
+        author_id: int,
+        server_id: int,
+        naming_enabled: bool = True,
+        shiny_hunt_prio: bool = False,
+        copy_support: bool = True,
+    ):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.server_id = server_id
         self.naming_enabled = naming_enabled
         self.shiny_hunt_prio = shiny_hunt_prio
+        self.copy_support = True if copy_support is None else bool(copy_support)
         self._build_layout()
 
     def _build_layout(self):
@@ -177,6 +187,13 @@ class NamingSettingsView(discord.ui.LayoutView):
         )
         shiny_hunt_prio_button.callback = self.toggle_shiny_hunt_prio
 
+        copy_support_button = discord.ui.Button(
+            label="On" if self.copy_support else "Off",
+            style=discord.ButtonStyle.success if self.copy_support else discord.ButtonStyle.danger,
+            custom_id="settings:copy-support:toggle",
+        )
+        copy_support_button.callback = self.toggle_copy_support
+
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
@@ -186,6 +203,7 @@ class NamingSettingsView(discord.ui.LayoutView):
 
         naming_status = "✅ **Enabled**" if self.naming_enabled else "❌ **Disabled**"
         shiny_hunt_prio_status = "✅ **Enabled**" if self.shiny_hunt_prio else "❌ **Disabled**"
+        copy_support_status = "✅ **Enabled**" if self.copy_support else "❌ **Disabled**"
 
         self.add_item(
             discord.ui.Container(
@@ -200,6 +218,10 @@ class NamingSettingsView(discord.ui.LayoutView):
                 discord.ui.Section(
                     f"**Shiny Hunt Priority**\n{shiny_hunt_prio_status}\n-# Give shiny hunt pings priority over collection pings. Reserves remain highest priority.",
                     accessory=shiny_hunt_prio_button,
+                ),
+                discord.ui.Section(
+                    f"**Copy-Support**\n{copy_support_status}\n-# Show the Pokétwo copy command under spawn names.",
+                    accessory=copy_support_button,
                 ),
                 discord.ui.Separator(),
                 discord.ui.ActionRow(back_button),
@@ -245,6 +267,19 @@ class NamingSettingsView(discord.ui.LayoutView):
         await db.execute(
             "UPDATE server_settings SET shiny_hunt_prio = $1 WHERE serverid = $2",
             self.shiny_hunt_prio,
+            self.server_id,
+        )
+        invalidate_server_settings_cache(self.server_id)
+        self._build_layout()
+        await interaction.response.edit_message(view=self)
+
+    async def toggle_copy_support(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+            return
+        self.copy_support = not self.copy_support
+        await db.execute(
+            "UPDATE server_settings SET copy_support = $1 WHERE serverid = $2",
+            self.copy_support,
             self.server_id,
         )
         invalidate_server_settings_cache(self.server_id)

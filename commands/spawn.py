@@ -619,6 +619,7 @@ class SpawnPredictor(commands.Cog):
         )
         naming_enabled = spawn_settings["naming"]
         shiny_hunt_prio = spawn_settings["shiny_hunt_prio"]
+        copy_support = spawn_settings["copy_support"]
         if not naming_enabled:
             return
 
@@ -900,7 +901,7 @@ class SpawnPredictor(commands.Cog):
                         )
                     )
 
-            if naming_enabled:
+            if naming_enabled and copy_support:
                 copy_name = (
                     "nidoran"
                     if name.casefold() in {"nidoranm", "nidoranf"}
