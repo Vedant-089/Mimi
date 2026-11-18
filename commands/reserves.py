@@ -8,8 +8,10 @@ from discord.ext import commands
 
 from database import db
 from functions import (
+    ensure_default_categories,
     ensure_ping_tables,
     get_allowed_role_ids,
+    get_group_pokemon_names,
     has_server_permission,
     is_suspended,
     refresh_reserve_cache,
@@ -53,7 +55,7 @@ GROUP_ALIASES = {
     "paradox": PARADOX_POKEMON,
 }
 
-def expand_reserve_inputs(input_names):
+def expand_reserve_inputs(input_names, guild_id=None):
     expanded = set()
     invalid = []
 
@@ -64,8 +66,9 @@ def expand_reserve_inputs(input_names):
         if key.startswith("normal "):
             key = key[7:].strip()
 
-        if key in GROUP_ALIASES:
-            expanded.update(name for name in GROUP_ALIASES[key] if name in VALID_POKEMON)
+        group_names = get_group_pokemon_names(key, guild_id)
+        if group_names is not None:
+            expanded.update(name for name in group_names if name in VALID_POKEMON)
             continue
 
         if key.startswith("all "):
@@ -402,7 +405,8 @@ class ReserveCommands(commands.Cog):
         user_id = member.id
         serverid = ctx.guild.id
         input_names = [name.strip().lower() for name in pokemon.split(",") if name.strip()]
-        valid_names, invalid_names = expand_reserve_inputs(input_names)
+        await ensure_default_categories(serverid, db)
+        valid_names, invalid_names = expand_reserve_inputs(input_names, serverid)
 
         if not valid_names:
             return await ctx.send("❌ No valid Pokémon provided.")
@@ -442,7 +446,8 @@ class ReserveCommands(commands.Cog):
 
         serverid = ctx.guild.id
         input_names = [name.strip().lower() for name in pokemon.split(",") if name.strip()]
-        valid_names, invalid_names = expand_reserve_inputs(input_names)
+        await ensure_default_categories(serverid, db)
+        valid_names, invalid_names = expand_reserve_inputs(input_names, serverid)
 
         if not valid_names:
             return await ctx.send("❌ No valid Pokémon provided.")
@@ -510,6 +515,7 @@ class ReserveCommands(commands.Cog):
     )
 
     async def parse_exchange_entries(self, ctx: commands.Context, message: discord.Message):
+        await ensure_default_categories(ctx.guild.id, db)
         entries = []
         format_error = False
         invalid_pokemon = []
@@ -547,7 +553,7 @@ class ReserveCommands(commands.Cog):
                     continue
 
                 input_names = [name.strip().lower() for name in pokemon_text.split(",") if name.strip()]
-                valid_names, invalid_names = expand_reserve_inputs(input_names)
+                valid_names, invalid_names = expand_reserve_inputs(input_names, ctx.guild.id)
                 if invalid_names or not valid_names:
                     invalid_pokemon.extend(invalid_names or [pokemon_text])
                     continue
@@ -626,7 +632,8 @@ class ReserveCommands(commands.Cog):
                 return await self.transfer_reserves(ctx, source, target)
 
             input_names = [name.strip().lower() for name in pokemon_text.split(",") if name.strip()]
-            valid_names, invalid_names = expand_reserve_inputs(input_names)
+            await ensure_default_categories(ctx.guild.id, db)
+            valid_names, invalid_names = expand_reserve_inputs(input_names, ctx.guild.id)
             if invalid_names:
                 return await ctx.send(f"❌ Invalid Pokémon: {', '.join(invalid_names)}")
             if not valid_names:
@@ -704,7 +711,8 @@ class ReserveCommands(commands.Cog):
     @commands.guild_only()
     async def search(self, ctx, *, names: str):
         input_names = [name.strip().lower() for name in names.split(",") if name.strip()]
-        valid_names, invalid_names = expand_reserve_inputs(input_names)
+        await ensure_default_categories(ctx.guild.id, db)
+        valid_names, invalid_names = expand_reserve_inputs(input_names, ctx.guild.id)
 
         if not valid_names:
             return await ctx.send("❌ No valid Pokémon provided.")

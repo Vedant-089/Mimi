@@ -1,7 +1,14 @@
 import discord
 from discord.ext import commands
 from database import db
-from functions import ensure_ping_tables, is_suspended, refresh_collection_cache, resolve_alias
+from functions import (
+    ensure_default_categories,
+    ensure_ping_tables,
+    get_group_pokemon_names,
+    is_suspended,
+    refresh_collection_cache,
+    resolve_alias,
+)
 import json
 
 with open("class.json", "r") as f:
@@ -41,7 +48,7 @@ GROUP_ALIASES = {
 }
 
 
-def expand_collection_inputs(input_names):
+def expand_collection_inputs(input_names, guild_id=None):
     expanded = set()
     invalid = []
 
@@ -52,8 +59,9 @@ def expand_collection_inputs(input_names):
         if key.startswith("normal "):
             key = key[7:].strip()
 
-        if key in GROUP_ALIASES:
-            expanded.update(name for name in GROUP_ALIASES[key] if name in VALID_POKEMON)
+        group_names = get_group_pokemon_names(key, guild_id)
+        if group_names is not None:
+            expanded.update(name for name in group_names if name in VALID_POKEMON)
             continue
 
         if key.startswith("all "):
@@ -226,7 +234,8 @@ class CollectionCommands(commands.Cog):
         user_id = ctx.author.id
         serverid = ctx.guild.id
         input_names = [n.strip().lower() for n in names.split(",")]
-        valid_names, invalid = expand_collection_inputs(input_names)
+        await ensure_default_categories(serverid, db)
+        valid_names, invalid = expand_collection_inputs(input_names, serverid)
 
         if not valid_names:
             return await ctx.send("❌ No valid Pokémon provided.")
@@ -256,7 +265,8 @@ class CollectionCommands(commands.Cog):
         user_id = ctx.author.id
         serverid = ctx.guild.id
         input_names = [n.strip().lower() for n in names.split(",")]
-        valid_names, invalid = expand_collection_inputs(input_names)
+        await ensure_default_categories(serverid, db)
+        valid_names, invalid = expand_collection_inputs(input_names, serverid)
 
         if not valid_names:
             return await ctx.send("❌ No valid Pokémon provided.")

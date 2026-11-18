@@ -47,7 +47,7 @@ HELP_PAGES_DATA = [
     {
         "title": "📁 Category Commands",
         "description": (
-            "• `m!category` - Shows this server's categories with an Edit button on each name.\n"
+            "• `m!category` - Shows this server's categories with an Edit button on each name. Every server starts with Rare, Gmax, Eevos, Paradox, and Regional.\n"
             "• `m!category create <name> pokemon1, pokemon2` - Creates a server-only category (Admins, or allowed roles if Category Edit/Create is on). Invalid names are skipped and listed as not added.\n"
             "• `m!category edit <name> pokemon1, pokemon2` - Replaces that category's Pokémon list (Admins, or allowed roles if Category Edit/Create is on). Invalid names are skipped and listed as not added."
         ),

@@ -5,6 +5,7 @@ from commands.reserves import expand_reserve_inputs
 from database import db
 from functions import (
     apply_category_cache,
+    ensure_default_categories,
     ensure_ping_tables,
     get_server_categories,
     get_server_category,
@@ -79,7 +80,8 @@ class CategoryEditModal(discord.ui.Modal, title="Edit Category"):
             )
 
         valid_names, invalid_names = expand_reserve_inputs(
-            split_pokemon_list(str(self.pokemon_list.value))
+            split_pokemon_list(str(self.pokemon_list.value)),
+            interaction.guild.id,
         )
         if not valid_names:
             message = "❌ No valid Pokémon to save."
@@ -250,6 +252,12 @@ class CategoryCommands(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         await ensure_ping_tables(db)
+        for guild in self.bot.guilds:
+            await ensure_default_categories(guild.id, db)
+
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+        await ensure_default_categories(guild.id, db)
 
     async def _ensure_manage(self, ctx: commands.Context) -> bool:
         if await has_server_permission(ctx.author, "allow_category", db):
@@ -288,7 +296,10 @@ class CategoryCommands(commands.Cog):
                 f"❌ **{existing['name']}** already exists. Use `m!category edit {existing['name']} pokemon1, pokemon2`."
             )
 
-        valid_names, invalid_names = expand_reserve_inputs(split_pokemon_list(pokemon_text))
+        valid_names, invalid_names = expand_reserve_inputs(
+            split_pokemon_list(pokemon_text),
+            ctx.guild.id,
+        )
         if not valid_names:
             message = "❌ No valid Pokémon to save."
             if invalid_names:
@@ -314,7 +325,10 @@ class CategoryCommands(commands.Cog):
         if existing is None:
             return await ctx.send(f"❌ No category named **{name}** in this server.")
 
-        valid_names, invalid_names = expand_reserve_inputs(split_pokemon_list(pokemon_text))
+        valid_names, invalid_names = expand_reserve_inputs(
+            split_pokemon_list(pokemon_text),
+            ctx.guild.id,
+        )
         if not valid_names:
             message = "❌ No valid Pokémon to save."
             if invalid_names:

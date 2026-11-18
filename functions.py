@@ -189,6 +189,22 @@ _category_cache = defaultdict(dict)
 _category_pokemon_cache = defaultdict(lambda: defaultdict(list))
 _category_cache_last_updated = 0
 _category_cache_lock = asyncio.Lock()
+_default_category_defs = None
+_default_category_seed_locks = defaultdict(asyncio.Lock)
+
+DEFAULT_CATEGORY_ORDER = ("rare", "gmax", "eevos", "paradox", "regional")
+CATEGORY_ALIAS_TO_KEY = {
+    "rare": "rare",
+    "rares": "rare",
+    "gmax": "gmax",
+    "gigantamax": "gmax",
+    "eevos": "eevos",
+    "eeveelutions": "eevos",
+    "evos": "eevos",
+    "paradox": "paradox",
+    "regional": "regional",
+    "regionals": "regional",
+}
 
 # guild_id -> pokemon_name -> [userids]
 _type_ping_cache = defaultdict(lambda: defaultdict(list))
@@ -687,6 +703,98 @@ async def get_users_reserved(pokemon_name: str, guild_id: int, db_instance):
 # Server Category Cache Functions
 # ------------------------
 
+def _names_from_grouped_json(path: str) -> set[str]:
+    with open(path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    return {
+        str(name).lower().strip()
+        for names in data.values()
+        for name in names
+        if str(name).strip()
+    }
+
+
+def get_default_category_defs():
+    global _default_category_defs
+    if _default_category_defs is not None:
+        return _default_category_defs
+
+    with open("class.json", "r", encoding="utf-8") as file:
+        valid_pokemon = {name.lower().strip() for name in json.load(file).keys()}
+
+    with open("eeveelutions_paradox.json", "r", encoding="utf-8") as file:
+        eevee_data = json.load(file)
+    eevee_names = {
+        str(name).lower().strip()
+        for name in eevee_data.get("eeveelutions_paradox", [])
+        if str(name).strip()
+    }
+    paradox_names = {
+        str(name).lower().strip()
+        for name in eevee_data.get("paradox", [])
+        if str(name).strip()
+    }
+
+    defs = [
+        ("rare", "Rare", sorted(_names_from_grouped_json("rare.json") & valid_pokemon)),
+        ("gmax", "Gmax", sorted(_names_from_grouped_json("gigantamax.json") & valid_pokemon)),
+        ("eevos", "Eevos", sorted(eevee_names & valid_pokemon)),
+        ("paradox", "Paradox", sorted(paradox_names & valid_pokemon)),
+        ("regional", "Regional", sorted(_names_from_grouped_json("regional.json") & valid_pokemon)),
+    ]
+    _default_category_defs = defs
+    return _default_category_defs
+
+
+def resolve_category_key(name: str) -> str:
+    key = (name or "").strip().lower()
+    return CATEGORY_ALIAS_TO_KEY.get(key, key)
+
+
+def get_group_pokemon_names(alias: str, guild_id=None) -> list[str] | None:
+    key = CATEGORY_ALIAS_TO_KEY.get((alias or "").strip().lower())
+    if key is None:
+        return None
+    if guild_id is not None:
+        entry = _category_cache.get(guild_id, {}).get(key)
+        if entry and entry.get("pokemon"):
+            return list(entry["pokemon"])
+    for default_key, _display_name, names in get_default_category_defs():
+        if default_key == key:
+            return list(names)
+    return []
+
+
+async def ensure_default_categories(server_id: int, db_instance):
+    async with _default_category_seed_locks[server_id]:
+        if _category_cache_last_updated == 0:
+            await refresh_category_cache(db_instance)
+        existing = _category_cache.get(server_id, {})
+        missing = [
+            (key, display_name, names)
+            for key, display_name, names in get_default_category_defs()
+            if key not in existing
+        ]
+        if not missing:
+            return
+        for key, display_name, names in missing:
+            if not names:
+                continue
+            await db_instance.execute(
+                """
+                INSERT INTO server_categories (serverid, category_key, display_name, pokemon_name)
+                SELECT $1, $2, $3, pokemon_name
+                FROM unnest($4::text[]) AS pokemon_name
+                ON CONFLICT DO NOTHING
+                """,
+                server_id,
+                key,
+                display_name,
+                names,
+            )
+        await refresh_category_cache(db_instance)
+
+
 async def refresh_category_cache(db_instance):
     global _category_cache, _category_pokemon_cache, _category_cache_last_updated
     async with _category_cache_lock:
@@ -758,10 +866,16 @@ async def apply_category_cache(server_id: int, category_key: str, display_name: 
 
 
 async def get_server_categories(server_id: int, db_instance):
-    if _category_cache_last_updated == 0:
-        await refresh_category_cache(db_instance)
+    await ensure_default_categories(server_id, db_instance)
     entries = list(_category_cache.get(server_id, {}).values())
-    entries.sort(key=lambda entry: entry["name"].casefold())
+    order = {key: index for index, key in enumerate(DEFAULT_CATEGORY_ORDER)}
+    entries.sort(
+        key=lambda entry: (
+            0 if entry["key"] in order else 1,
+            order.get(entry["key"], 0),
+            entry["name"].casefold(),
+        )
+    )
     return [
         {
             "key": entry["key"],
@@ -773,9 +887,8 @@ async def get_server_categories(server_id: int, db_instance):
 
 
 async def get_server_category(server_id: int, category_name: str, db_instance):
-    if _category_cache_last_updated == 0:
-        await refresh_category_cache(db_instance)
-    key = (category_name or "").strip().lower()
+    await ensure_default_categories(server_id, db_instance)
+    key = resolve_category_key(category_name)
     entry = _category_cache.get(server_id, {}).get(key)
     if entry is None:
         return None
