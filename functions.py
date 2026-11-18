@@ -1,5 +1,6 @@
 import time
 import asyncio
+import copy
 import json
 import logging
 import discord
@@ -70,39 +71,71 @@ async def set_poketwo_send_permission(
         return True
 
 
+_only_ping_cached = None
+
+
 def is_only_ping_enabled() -> bool:
+    global _only_ping_cached
+    if _only_ping_cached is not None:
+        return _only_ping_cached
     try:
         with open(ONLY_PING_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
+        _only_ping_cached = False
         return False
     except (OSError, json.JSONDecodeError) as error:
         print(f"⚠️ Failed to read {ONLY_PING_FILE}: {error}")
         return False
 
     if isinstance(data, bool):
-        return data
-    return isinstance(data, dict) and data.get("only_ping") is True
+        _only_ping_cached = data
+    else:
+        _only_ping_cached = isinstance(data, dict) and data.get("only_ping") is True
+    return _only_ping_cached
 
 
 def set_only_ping_enabled(enabled: bool) -> None:
+    global _only_ping_cached
     with open(ONLY_PING_FILE, "w", encoding="utf-8") as f:
         json.dump({"only_ping": enabled}, f, indent=2)
         f.write("\n")
+    _only_ping_cached = enabled
+
+
+_suspended_users_cache = None
 
 
 def load_suspended_users() -> set[str]:
+    global _suspended_users_cache
+    if _suspended_users_cache is not None:
+        return set(_suspended_users_cache)
+
     try:
         with open(SUSPENDED_USERS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
+        _suspended_users_cache = set()
         return set()
 
     if isinstance(data, dict):
         data = data.get("users", [])
     if not isinstance(data, list):
+        _suspended_users_cache = set()
         return set()
-    return {username.casefold() for username in data if isinstance(username, str)}
+    _suspended_users_cache = {
+        username.casefold() for username in data if isinstance(username, str)
+    }
+    return set(_suspended_users_cache)
+
+
+def save_suspended_users(users) -> None:
+    global _suspended_users_cache
+    _suspended_users_cache = {
+        str(username).casefold() for username in users if username
+    }
+    with open(SUSPENDED_USERS_FILE, "w", encoding="utf-8") as file:
+        json.dump(sorted(_suspended_users_cache), file, indent=2)
 
 
 def is_suspended(user) -> bool:
@@ -170,6 +203,7 @@ _quest_requirements = defaultdict(
 _quest_requirements_lock = asyncio.Lock()
 _QUEST_REQUIREMENTS_FILE = "grind_support_quests.json"
 _quest_requirements_loaded = False
+_quest_requirements_write_task = None
 LOGGER = logging.getLogger(__name__)
 with open("typing.json", "r", encoding="utf-8") as _typing_file:
     _type_pokemon_names = {
@@ -548,6 +582,36 @@ async def refresh_collection_cache(db_instance):
             print("❌ Collection Cache Refresh Error:", e)
 
 
+async def apply_collection_cache_names(
+    server_id: int,
+    user_id: int,
+    names,
+    *,
+    remove: bool = False,
+):
+    """Patch one user's collection cache without rebuilding every row."""
+    if _collection_cache_last_updated == 0:
+        return
+
+    async with _collection_cache_lock:
+        if _collection_cache_last_updated == 0:
+            return
+        guild_cache = _collection_cache[server_id]
+        for raw_name in names:
+            name = (raw_name or "").strip().lower()
+            if not name:
+                continue
+            users = guild_cache[name]
+            if remove:
+                try:
+                    while True:
+                        users.remove(user_id)
+                except ValueError:
+                    pass
+            elif user_id not in users:
+                users.append(user_id)
+
+
 def invalidate_collection_cache():
     global _collection_cache_last_updated
     if _collection_cache_last_updated:
@@ -630,6 +694,31 @@ def _parse_ping_pokemons(raw_value):
     return []
 
 
+_TP_QP_UNSET = object()
+
+
+def _build_tp_qp_caches(payloads):
+    temp_type_cache = defaultdict(lambda: defaultdict(list))
+    temp_region_cache = defaultdict(lambda: defaultdict(list))
+    for server_id, user_id, type_raw, region_raw in payloads:
+        for poke in _parse_ping_pokemons(type_raw):
+            if poke:
+                temp_type_cache[server_id][poke].append(user_id)
+        for poke in _parse_ping_pokemons(region_raw):
+            if poke:
+                temp_region_cache[server_id][poke].append(user_id)
+    return temp_type_cache, temp_region_cache
+
+
+def _remove_user_from_guild_cache(guild_cache, user_id: int):
+    for users in guild_cache.values():
+        try:
+            while True:
+                users.remove(user_id)
+        except ValueError:
+            pass
+
+
 async def refresh_tp_qp_cache(db_instance):
     global _type_ping_cache, _region_ping_cache, _tp_qp_cache_last_updated
     async with _tp_qp_cache_lock:
@@ -638,28 +727,57 @@ async def refresh_tp_qp_cache(db_instance):
                 SELECT serverid, userid, type_pings, region_pings
                 FROM tp_qp
             """)
-            temp_type_cache = defaultdict(lambda: defaultdict(list))
-            temp_region_cache = defaultdict(lambda: defaultdict(list))
-
-            for row in rows:
-                server_id = row["serverid"]
-                user_id = row["userid"]
-
-                t_pokemons = _parse_ping_pokemons(row["type_pings"])
-                for poke in t_pokemons:
-                    if poke:
-                        temp_type_cache[server_id][poke].append(user_id)
-
-                r_pokemons = _parse_ping_pokemons(row["region_pings"])
-                for poke in r_pokemons:
-                    if poke:
-                        temp_region_cache[server_id][poke].append(user_id)
-
+            payloads = [
+                (row["serverid"], row["userid"], row["type_pings"], row["region_pings"])
+                for row in rows
+            ]
+            temp_type_cache, temp_region_cache = await asyncio.to_thread(
+                _build_tp_qp_caches,
+                payloads,
+            )
             _type_ping_cache = temp_type_cache
             _region_ping_cache = temp_region_cache
             _tp_qp_cache_last_updated = time.time()
         except Exception as e:
             print("❌ TP/QP Cache Refresh Error:", e)
+
+
+async def apply_tp_qp_cache_user(
+    server_id: int,
+    user_id: int,
+    type_pings=_TP_QP_UNSET,
+    region_pings=_TP_QP_UNSET,
+):
+    """Patch one user's type/region ping cache without rebuilding every row."""
+    if _tp_qp_cache_last_updated == 0:
+        return
+
+    type_pokemons = (
+        _parse_ping_pokemons(type_pings)
+        if type_pings is not _TP_QP_UNSET
+        else None
+    )
+    region_pokemons = (
+        _parse_ping_pokemons(region_pings)
+        if region_pings is not _TP_QP_UNSET
+        else None
+    )
+
+    async with _tp_qp_cache_lock:
+        if _tp_qp_cache_last_updated == 0:
+            return
+        if type_pokemons is not None:
+            type_guild = _type_ping_cache[server_id]
+            _remove_user_from_guild_cache(type_guild, user_id)
+            for poke in type_pokemons:
+                if poke and user_id not in type_guild[poke]:
+                    type_guild[poke].append(user_id)
+        if region_pokemons is not None:
+            region_guild = _region_ping_cache[server_id]
+            _remove_user_from_guild_cache(region_guild, user_id)
+            for poke in region_pokemons:
+                if poke and user_id not in region_guild[poke]:
+                    region_guild[poke].append(user_id)
 
 
 def invalidate_tp_qp_cache():
@@ -713,8 +831,8 @@ async def set_quest_requirements(
             requirements["types"][quest_type.casefold()] = max(0, remaining)
         for region, remaining in region_requirements.items():
             requirements["regions"][region.casefold()] = max(0, remaining)
-        await _save_quest_requirements_locked()
         _quest_requirements_loaded = True
+        _schedule_quest_requirements_write()
 
 
 async def _load_quest_requirements_locked():
@@ -757,14 +875,42 @@ async def _load_quest_requirements_locked():
     _quest_requirements_loaded = True
 
 
-async def _save_quest_requirements_locked():
-    data = {
-        f"{server_id}:{user_id}": requirements
+def _quest_requirements_snapshot():
+    return {
+        f"{server_id}:{user_id}": {
+            "types": dict(requirements["types"]),
+            "regions": dict(requirements["regions"]),
+        }
         for (server_id, user_id), requirements in _quest_requirements.items()
     }
+
+
+def _write_quest_requirements_file(data: dict):
+    with open(_QUEST_REQUIREMENTS_FILE, "w", encoding="utf-8") as file:
+        json.dump(data, file, separators=(",", ":"))
+
+
+def _schedule_quest_requirements_write():
+    global _quest_requirements_write_task
     try:
-        with open(_QUEST_REQUIREMENTS_FILE, "w", encoding="utf-8") as file:
-            json.dump(data, file, indent=2, sort_keys=True)
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            _write_quest_requirements_file(_quest_requirements_snapshot())
+        except OSError:
+            LOGGER.exception("Failed to save grind-support quest requirements")
+        return
+
+    if _quest_requirements_write_task is None or _quest_requirements_write_task.done():
+        _quest_requirements_write_task = loop.create_task(_flush_quest_requirements())
+
+
+async def _flush_quest_requirements():
+    await asyncio.sleep(0.1)
+    async with _quest_requirements_lock:
+        snapshot = _quest_requirements_snapshot()
+    try:
+        await asyncio.to_thread(_write_quest_requirements_file, snapshot)
     except OSError:
         LOGGER.exception("Failed to save grind-support quest requirements")
 
@@ -782,7 +928,11 @@ async def limit_quest_ping_users(
     if server_id not in GRIND_SUPPORT_SERVER_IDS or not grind_support_users:
         return type_ping_users, region_ping_users
 
+    pokemon_types = [str(name).casefold() for name in pokemon_types]
+    pokemon_regions = [str(name).casefold() for name in pokemon_regions]
+
     async with _quest_requirements_lock:
+        await _load_quest_requirements_locked()
         completed_types = defaultdict(set)
         completed_regions = defaultdict(set)
         requirements_changed = False
@@ -845,103 +995,100 @@ async def limit_quest_ping_users(
                                 completed_regions[user_id].add(region)
 
         if requirements_changed:
-            await _save_quest_requirements_locked()
+            _schedule_quest_requirements_write()
 
-        changed_type_pings = False
-        for user_id, type_names in completed_types.items():
-            row = await db_instance.fetchrow(
-                """
-                SELECT type_pings
-                FROM tp_qp
-                WHERE serverid = $1 AND userid = $2
-                """,
-                server_id,
-                user_id,
-            )
-            if not row or not row["type_pings"]:
-                continue
-            try:
-                payload = json.loads(row["type_pings"])
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(payload, dict):
-                continue
+        type_updates = list(completed_types.items())
+        region_updates = list(completed_regions.items())
 
-            active_types = {
-                str(type_name).casefold()
-                for type_name in payload.get("types", [])
+    for user_id, type_names in type_updates:
+        row = await db_instance.fetchrow(
+            """
+            SELECT type_pings
+            FROM tp_qp
+            WHERE serverid = $1 AND userid = $2
+            """,
+            server_id,
+            user_id,
+        )
+        if not row or not row["type_pings"]:
+            continue
+        try:
+            payload = json.loads(row["type_pings"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        active_types = {
+            str(type_name).casefold()
+            for type_name in payload.get("types", [])
+        }
+        remaining_types = active_types - type_names
+        payload["types"] = sorted(remaining_types)
+        payload["pokemons"] = sorted(
+            {
+                pokemon_name
+                for type_name in remaining_types
+                for pokemon_name in _type_pokemon_names.get(type_name, set())
             }
-            remaining_types = active_types - type_names
-            payload["types"] = sorted(remaining_types)
-            payload["pokemons"] = sorted(
-                {
-                    pokemon_name
-                    for type_name in remaining_types
-                    for pokemon_name in _type_pokemon_names.get(type_name, set())
-                }
-            )
-            await db_instance.execute(
-                """
-                UPDATE tp_qp
-                SET type_pings = $3
-                WHERE serverid = $1 AND userid = $2
-                """,
-                server_id,
-                user_id,
-                json.dumps(payload),
-            )
-            changed_type_pings = True
+        )
+        encoded = json.dumps(payload)
+        await db_instance.execute(
+            """
+            UPDATE tp_qp
+            SET type_pings = $3
+            WHERE serverid = $1 AND userid = $2
+            """,
+            server_id,
+            user_id,
+            encoded,
+        )
+        await apply_tp_qp_cache_user(server_id, user_id, type_pings=encoded)
 
-        if changed_type_pings:
-            await refresh_tp_qp_cache(db_instance)
+    for user_id, region_names in region_updates:
+        row = await db_instance.fetchrow(
+            """
+            SELECT region_pings
+            FROM tp_qp
+            WHERE serverid = $1 AND userid = $2
+            """,
+            server_id,
+            user_id,
+        )
+        if not row or not row["region_pings"]:
+            continue
+        try:
+            payload = json.loads(row["region_pings"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
 
-        changed_region_pings = False
-        for user_id, region_names in completed_regions.items():
-            row = await db_instance.fetchrow(
-                """
-                SELECT region_pings
-                FROM tp_qp
-                WHERE serverid = $1 AND userid = $2
-                """,
-                server_id,
-                user_id,
-            )
-            if not row or not row["region_pings"]:
-                continue
-            try:
-                payload = json.loads(row["region_pings"])
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(payload, dict):
-                continue
-
-            active_regions = {
-                str(region_name).casefold()
-                for region_name in payload.get("regions", [])
+        active_regions = {
+            str(region_name).casefold()
+            for region_name in payload.get("regions", [])
+        }
+        remaining_regions = active_regions - region_names
+        payload["regions"] = sorted(remaining_regions)
+        payload["pokemons"] = sorted(
+            {
+                pokemon_name
+                for region_name in remaining_regions
+                for pokemon_name in _region_pokemon_names.get(region_name, set())
             }
-            remaining_regions = active_regions - region_names
-            payload["regions"] = sorted(remaining_regions)
-            payload["pokemons"] = sorted(
-                {
-                    pokemon_name
-                    for region_name in remaining_regions
-                    for pokemon_name in _region_pokemon_names.get(region_name, set())
-                }
-            )
-            await db_instance.execute(
-                """
-                UPDATE tp_qp
-                SET region_pings = $3
-                WHERE serverid = $1 AND userid = $2
-                """,
-                server_id,
-                user_id,
-                json.dumps(payload),
-            )
-            changed_region_pings = True
-
-        if changed_region_pings:
-            await refresh_tp_qp_cache(db_instance)
+        )
+        encoded = json.dumps(payload)
+        await db_instance.execute(
+            """
+            UPDATE tp_qp
+            SET region_pings = $3
+            WHERE serverid = $1 AND userid = $2
+            """,
+            server_id,
+            user_id,
+            encoded,
+        )
+        await apply_tp_qp_cache_user(server_id, user_id, region_pings=encoded)
 
     return limited_type_users, limited_region_users
 
@@ -1001,7 +1148,6 @@ async def warm_ping_caches(db_instance, server_ids=None):
 # Incense Tracking Functions
 # ------------------------
 
-import copy
 import os
 import re
 

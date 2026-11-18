@@ -9,8 +9,10 @@ import json
 import urllib.request
 import os
 import asyncio
+import copy
 import functools
 import concurrent.futures
+import queue
 import re
 import socket
 import time
@@ -36,6 +38,11 @@ from functions import (
 )
 
 POKETWO_BOT_ID = 716390085896962058
+# Cap in-flight spawn HTTP so command replies can cut in. Discord's global
+# bucket is still ~50 req/s, so 400 names take the same wall time; we just
+# do not enqueue all 400 POSTs ahead of m!ev / other commands.
+SPAWN_SEND_CONCURRENCY = 24
+INFERENCE_WORKERS = 16
 TYPE_CHANNEL_SYNC_GUILD_IDS = {
     1322103302888095837,
     1429413142319988788,
@@ -96,6 +103,28 @@ def run_full_inference(session, img_bytes):
     inference_ms = (time.perf_counter() - inference_start) * 1000
 
     return probs, preprocess_ms, inference_ms
+
+
+def run_full_inference_from_pool(session_pool, img_bytes):
+    session = session_pool.get()
+    try:
+        return run_full_inference(session, img_bytes)
+    finally:
+        session_pool.put(session)
+
+
+def create_onnx_session():
+    session_options = ort.SessionOptions()
+    session_options.graph_optimization_level = (
+        ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    )
+    session_options.intra_op_num_threads = 1
+    session_options.inter_op_num_threads = 1
+    return ort.InferenceSession(
+        MODEL_PATH,
+        sess_options=session_options,
+        providers=["CPUExecutionProvider"],
+    )
 
 
 class SpawnPredictor(commands.Cog):
@@ -200,39 +229,29 @@ class SpawnPredictor(commands.Cog):
 
         self._type_enabled = self._read_type_enabled()
         self._recognition_enabled = self._read_recognition_enabled()
+        self._role_id_cache = {}
+        self._type_channel_data = None
+        self._type_channel_write_task = None
+        self._spawn_log_count = 0
 
-        # Load ONNX model with CPU settings tuned for this VPS.
-        # NOTE: intra_op_num_threads=1 was benchmarked for the old
-        # ConvNeXt-Tiny model. Re-benchmark this value (try 1, 2, 3)
-        # against the new MobileNetV4 int8 model before trusting it -
-        # the optimal thread count is architecture-dependent and may
-        # have changed.
-        session_options = ort.SessionOptions()
-        session_options.graph_optimization_level = (
-            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        )
-        session_options.intra_op_num_threads = 1
-        session_options.inter_op_num_threads = 1
+        # One InferenceSession is not safe/useful for concurrent run().
+        # On a 32-vCPU host, keep a pool of single-thread sessions so
+        # incense bursts actually run in parallel without starving the
+        # event loop (HTTP, gateway, commands).
+        self.session_pool = queue.SimpleQueue()
+        for _ in range(INFERENCE_WORKERS):
+            self.session_pool.put(create_onnx_session())
 
-        self.ort_session = ort.InferenceSession(
-            MODEL_PATH,
-            sess_options=session_options,
-            providers=["CPUExecutionProvider"]
-        )
-
-        # Keep inference isolated from other bot thread-pool work.
-        # Each session.run() is pinned to 1 internal thread (see
-        # intra_op_num_threads above), so 2 workers here means at most
-        # 2 genuinely parallel single-threaded inferences on the 3-vCPU
-        # VPS, leaving 1 core free for the event loop / Discord gateway.
-        # If you still see queuing under peak load, try 3; if latency
-        # per-call gets worse, drop back to 1.
         self.inference_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=25,
+            max_workers=INFERENCE_WORKERS,
             thread_name_prefix="onnx-inference"
         )
+        self._spawn_send_semaphore = asyncio.Semaphore(SPAWN_SEND_CONCURRENCY)
 
-        print("ONNX model loaded (optimized, 1 CPU thread per worker, 2 workers).")
+        print(
+            f"ONNX model loaded ({INFERENCE_WORKERS} parallel sessions, "
+            "1 CPU thread each)."
+        )
 
         # family=AF_INET avoids a very common failure mode: aiohttp (no
         # Happy Eyeballs) may still be handed an IPv6 address for
@@ -247,8 +266,8 @@ class SpawnPredictor(commands.Cog):
         # limit_per_host caps concurrent connections to a single host so
         # one saturated host can't starve the whole pool.
         connector = aiohttp.TCPConnector(
-            limit=100,
-            limit_per_host=30,
+            limit=128,
+            limit_per_host=64,
             ttl_dns_cache=300,
             keepalive_timeout=30,
             family=socket.AF_INET,
@@ -332,9 +351,30 @@ class SpawnPredictor(commands.Cog):
             json.dump(
                 data,
                 f,
-                indent=2,
-                sort_keys=True
+                separators=(",", ":"),
             )
+
+    def _ensure_type_channel_data(self):
+        if self._type_channel_data is None:
+            self._type_channel_data = self._read_type_channel_data()
+        return self._type_channel_data
+
+    def _schedule_type_channel_write(self):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._write_type_channel_data(self._ensure_type_channel_data())
+            return
+        if self._type_channel_write_task is None or self._type_channel_write_task.done():
+            self._type_channel_write_task = loop.create_task(
+                self._flush_type_channel_data()
+            )
+
+    async def _flush_type_channel_data(self):
+        await asyncio.sleep(0.2)
+        async with self.type_channels_lock:
+            snapshot = copy.deepcopy(self._ensure_type_channel_data())
+        await asyncio.to_thread(self._write_type_channel_data, snapshot)
 
     async def sync_type_channel_data(
         self,
@@ -342,10 +382,7 @@ class SpawnPredictor(commands.Cog):
         types: list[str]
     ):
         async with self.type_channels_lock:
-
-            data = await asyncio.to_thread(
-                self._read_type_channel_data
-            )
+            data = self._ensure_type_channel_data()
 
             for type_name in list(data.keys()):
                 data[type_name] = [
@@ -360,20 +397,14 @@ class SpawnPredictor(commands.Cog):
                 if channel_id not in data[type_name]:
                     data[type_name].append(channel_id)
 
-            await asyncio.to_thread(
-                self._write_type_channel_data,
-                data
-            )
+            self._schedule_type_channel_write()
 
     async def get_saved_channels_for_type(
         self,
         type_name: str
     ):
         async with self.type_channels_lock:
-
-            data = await asyncio.to_thread(
-                self._read_type_channel_data
-            )
+            data = self._ensure_type_channel_data()
 
         return data.get(
             type_name.lower(),
@@ -585,8 +616,8 @@ class SpawnPredictor(commands.Cog):
             probs, _preprocess_ms, _inference_ms = await loop.run_in_executor(
                 self.inference_executor,
                 functools.partial(
-                    run_full_inference,
-                    self.ort_session,
+                    run_full_inference_from_pool,
+                    self.session_pool,
                     img_bytes
                 )
             )
@@ -653,21 +684,19 @@ class SpawnPredictor(commands.Cog):
 
         grind_support_users = set()
         if message.guild.id in GRIND_SUPPORT_SERVER_IDS:
-            try:
-                grind_support_users = await get_grind_support_users(
-                    db,
-                    message.guild.id,
-                )
-                await set_poketwo_send_permission(
+            grind_support_users = await get_grind_support_users(
+                db,
+                message.guild.id,
+            )
+            perm_task = asyncio.create_task(
+                self._mute_poketwo_for_spawn(
                     message.guild,
                     message.channel,
-                    False,
                 )
-            except (discord.Forbidden, discord.HTTPException) as error:
-                print(
-                    f"⚠️ Failed to apply grind support channel control in "
-                    f"{message.guild.id}/{message.channel.id}: {error}"
-                )
+            )
+            perm_task.add_done_callback(
+                self._log_background_task_exception
+            )
 
         if not self.is_recognition_enabled():
             return
@@ -736,8 +765,8 @@ class SpawnPredictor(commands.Cog):
             probs, preprocess_ms, inference_ms = await loop.run_in_executor(
                 self.inference_executor,
                 functools.partial(
-                    run_full_inference,
-                    self.ort_session,
+                    run_full_inference_from_pool,
+                    self.session_pool,
                     img_bytes
                 )
             )
@@ -757,18 +786,23 @@ class SpawnPredictor(commands.Cog):
                 return
 
             if message.guild.id in GRIND_SUPPORT_SERVER_IDS:
-                await db.execute(
-                    """
-                    INSERT INTO grind_support_spawns (
-                        guildid, channelid, messageid, pokemon_name
+                spawn_insert = asyncio.create_task(
+                    db.execute(
+                        """
+                        INSERT INTO grind_support_spawns (
+                            guildid, channelid, messageid, pokemon_name
+                        )
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (messageid) DO NOTHING
+                        """,
+                        message.guild.id,
+                        message.channel.id,
+                        message.id,
+                        name.casefold(),
                     )
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (messageid) DO NOTHING
-                    """,
-                    message.guild.id,
-                    message.channel.id,
-                    message.id,
-                    name.casefold(),
+                )
+                spawn_insert.add_done_callback(
+                    self._log_background_task_exception
                 )
 
             total_ms = (
@@ -776,14 +810,12 @@ class SpawnPredictor(commands.Cog):
                 - overall_start
             ) * 1000
 
-            print(
-                f"[spawn] "
-                f"download={download_ms:.1f}ms "
+            spawn_log = (
+                f"[spawn] download={download_ms:.1f}ms "
                 f"preprocess={preprocess_ms:.1f}ms "
                 f"inference={inference_ms:.1f}ms "
                 f"total={total_ms:.1f}ms "
-                f"name={name} "
-                f"conf={confidence:.3%}"
+                f"name={name} conf={confidence:.3%}"
             )
 
             lookup_start = time.perf_counter()
@@ -854,56 +886,30 @@ class SpawnPredictor(commands.Cog):
                 return
 
             rare_role_mentions = []
-
             if rares:
-                role = discord.utils.get(
-                    message.guild.roles,
-                    name="Rares"
-                )
-
-                if role:
-                    rare_role_mentions.append(
-                        role.mention
-                    )
+                mention = self._guild_role_mention(message.guild, "Rares")
+                if mention:
+                    rare_role_mentions.append(mention)
 
             regional_role_mentions = []
-
             if regionals:
-                role = discord.utils.get(
-                    message.guild.roles,
-                    name="Regionals"
-                )
-
-                if role:
-                    regional_role_mentions.append(
-                        role.mention
-                    )
+                mention = self._guild_role_mention(message.guild, "Regionals")
+                if mention:
+                    regional_role_mentions.append(mention)
 
             eeveelutions_paradox_role_mentions = []
-
             if eeveelutions_paradox:
-                role = discord.utils.get(
-                    message.guild.roles,
-                    name="Eeveelutions & Paradox"
+                mention = self._guild_role_mention(
+                    message.guild, "Eeveelutions & Paradox"
                 )
-
-                if role:
-                    eeveelutions_paradox_role_mentions.append(
-                        role.mention
-                    )
+                if mention:
+                    eeveelutions_paradox_role_mentions.append(mention)
 
             gigantamax_role_mentions = []
-
             if gigantamax:
-                role = discord.utils.get(
-                    message.guild.roles,
-                    name="Gigantamax"
-                )
-
-                if role:
-                    gigantamax_role_mentions.append(
-                        role.mention
-                    )
+                mention = self._guild_role_mention(message.guild, "Gigantamax")
+                if mention:
+                    gigantamax_role_mentions.append(mention)
 
             # ==================================================
             # PREDICTION MESSAGE
@@ -1018,18 +1024,22 @@ class SpawnPredictor(commands.Cog):
 
             if reply_lines:
                 send_start = time.perf_counter()
-                await message.channel.send("\n".join(reply_lines))
+                await self._send_spawn_reply(
+                    message.channel,
+                    "\n".join(reply_lines),
+                )
                 send_ms = (time.perf_counter() - send_start) * 1000
             else:
                 send_ms = 0.0
 
             lookup_ms = (time.perf_counter() - lookup_start) * 1000
-            print(
-                f"[spawn] lookup+send={lookup_ms:.1f}ms name={name}"
-            )
-            print(
-                f"[spawn] discord-send={send_ms:.1f}ms name={name}"
-            )
+            self._spawn_log_count += 1
+            if self._spawn_log_count <= 5 or self._spawn_log_count % 25 == 0:
+                print(
+                    f"{spawn_log} lookup+send={lookup_ms:.1f}ms "
+                    f"discord-send={send_ms:.1f}ms "
+                    f"named={self._spawn_log_count}"
+                )
 
             self._record_spawn_timing(
                 inference_ms,
@@ -1041,6 +1051,32 @@ class SpawnPredictor(commands.Cog):
                 "⚠️ Prediction error:",
                 e
             )
+
+    async def _send_spawn_reply(self, channel, content: str):
+        async with self._spawn_send_semaphore:
+            await channel.send(content)
+
+    async def _mute_poketwo_for_spawn(self, guild, channel):
+        try:
+            await set_poketwo_send_permission(guild, channel, False)
+        except (discord.Forbidden, discord.HTTPException) as error:
+            print(
+                f"⚠️ Failed to apply grind support channel control in "
+                f"{guild.id}/{channel.id}: {error}"
+            )
+
+    def _guild_role_mention(self, guild, role_name: str):
+        if guild is None:
+            return None
+        cache_key = (guild.id, role_name)
+        role_id = self._role_id_cache.get(cache_key)
+        role = guild.get_role(role_id) if role_id else None
+        if role is None:
+            role = discord.utils.get(guild.roles, name=role_name)
+            if role is None:
+                return None
+            self._role_id_cache[cache_key] = role.id
+        return role.mention
 
     @staticmethod
     def _log_background_task_exception(task: asyncio.Task):

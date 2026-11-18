@@ -1,16 +1,14 @@
-import json
-
 from discord.ext import commands
 
 from database import db
 from functions import (
-    SUSPENDED_USERS_FILE,
     has_allowed_support_role,
     load_suspended_users,
     refresh_collection_cache,
     refresh_hunt_cache,
     refresh_reserve_cache,
     refresh_tp_qp_cache,
+    save_suspended_users,
     wipe_user_data,
 )
 
@@ -38,8 +36,7 @@ class SuspendCommands(commands.Cog):
             return
 
         suspended_users.add(user_id)
-        with open(SUSPENDED_USERS_FILE, "w", encoding="utf-8") as file:
-            json.dump(sorted(suspended_users), file, indent=2)
+        save_suspended_users(suspended_users)
 
         await wipe_user_data(db, int(user_id))
         await refresh_collection_cache(db)
@@ -67,8 +64,7 @@ class SuspendCommands(commands.Cog):
             return
 
         suspended_users.remove(user_id)
-        with open(SUSPENDED_USERS_FILE, "w", encoding="utf-8") as file:
-            json.dump(sorted(suspended_users), file, indent=2)
+        save_suspended_users(suspended_users)
         await ctx.send(f"✅ {user_id} has been unsuspended from Mimi successfully.")
 
 

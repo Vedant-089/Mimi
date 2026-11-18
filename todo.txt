@@ -1,0 +1,31 @@
+GIVEN TO DO
+===========
+1. Continue the previous agent’s incense-lag + m!ev work (it stopped mid-edit).
+2. Commands must stay responsive while the bot names ~400–500 incense.
+3. Ignore old 2-worker / 3-vCPU guidance; this VPS is 32 vCPU.
+4. Fix m!ev lag vs other commands.
+5. Fix m!ev clear (not working properly).
+6. Fix default m!ev (non gs-true) so it does what it is designed for.
+7. Find bottlenecks and fix them; explain clearly.
+
+DONE COMPLETELY
+===============
+1. Previous session resumed: ONNX session pool (16 workers), spawn-send cap,
+   incense JSON debounce, incremental ping/collection cache, quest_data
+   in-memory + delayed write. Compile/tests that never ran are now passing.
+2. Commands can cut in during incense naming: spawn replies are limited to 24
+   in-flight Discord POSTs; command ctx.send does not take that semaphore.
+3. 32 vCPU used: 16 parallel single-thread ONNX sessions, CDN host cap 64,
+   type_channels kept in memory and flushed in the background (no per-spawn
+   full-file rewrite), spawn prints sampled, 429 log I/O off the event loop.
+4. m!ev no longer rebuilds the full type/region cache; it patches one user,
+   writes quest JSON off-loop, and uses a per-user lock instead of a global one.
+5. m!ev clear restores base type/region pings and removes only event-added
+   unknown-gender collection names; grind-support clear nulls pings + quotas.
+6. Default (non gs) m!ev: reply to a quest embed, store quests, turn on the
+   configured number of active type/region pings, optionally add unknown-gender
+   collection pings. It no longer writes grind-support quota files.
+7. Bottlenecks addressed: shared Discord HTTP, one ONNX session, per-spawn
+   disk I/O (only_ping, type_channels, incense, 429 log, prints), full cache
+   rebuilds on m!ev. Discord’s global ~50 req/s bucket still applies to naming
+   POSTs; we cannot remove that without slowing names. Restart the bot to load.

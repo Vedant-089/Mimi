@@ -4,6 +4,7 @@ import re
 import asyncio
 import csv
 import os
+from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 import discord
@@ -11,9 +12,10 @@ from discord.ext import commands
 from database import db
 from functions import (
     GRIND_SUPPORT_SERVER_IDS,
+    apply_collection_cache_names,
+    apply_tp_qp_cache_user,
     get_grind_support_users,
     is_suspended,
-    refresh_tp_qp_cache,
     set_quest_requirements,
 )
 
@@ -21,8 +23,49 @@ LOGGER = logging.getLogger(__name__)
 QUEST_COMPLETION_BOT_ID = 716390085896962058
 QUEST_DATA_FILE = "quest_data.json"
 TYPE_CHANNELS_FILE = Path(__file__).resolve().parent.parent / "type_channels.json"
-_QUEST_STATE_LOCK = asyncio.Lock()
 _QUEST_FILE_LOCK = asyncio.Lock()
+_quest_user_locks = defaultdict(asyncio.Lock)
+_quest_data = None
+_quest_write_task = None
+
+
+def _ensure_quest_data() -> dict:
+    global _quest_data
+    if _quest_data is None:
+        _quest_data = TypeRegionPings._read_quest_data()
+    return _quest_data
+
+
+def _schedule_quest_data_write():
+    global _quest_write_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        TypeRegionPings._write_quest_data(_ensure_quest_data())
+        return
+    if _quest_write_task is None or _quest_write_task.done():
+        _quest_write_task = loop.create_task(_flush_quest_data())
+
+
+async def _flush_quest_data():
+    await asyncio.sleep(0.1)
+    async with _QUEST_FILE_LOCK:
+        snapshot = deepcopy(_ensure_quest_data())
+    try:
+        await asyncio.to_thread(TypeRegionPings._write_quest_data, snapshot)
+    except OSError:
+        LOGGER.exception("Failed to save quest data")
+
+
+def _quest_user_lock(server_id: int, user_id: int) -> asyncio.Lock:
+    return _quest_user_locks[(server_id, user_id)]
+
+
+def _build_type_region_payloads(type_names, region_names):
+    return (
+        build_ping_payload(type_names, "types", get_pokemons_for_types),
+        build_ping_payload(region_names, "regions", get_pokemons_for_regions),
+    )
 
 # Load type and region JSON mappings
 with open("typing.json", "r", encoding="utf-8") as f:
@@ -632,7 +675,7 @@ class TypePingView(PingView):
             self.author_id,
             payload,
         )
-        await refresh_tp_qp_cache(db)
+        await apply_tp_qp_cache_user(self.server_id, self.author_id, type_pings=payload)
 
 
 class RegionPingView(PingView):
@@ -657,7 +700,7 @@ class RegionPingView(PingView):
             self.author_id,
             payload,
         )
-        await refresh_tp_qp_cache(db)
+        await apply_tp_qp_cache_user(self.server_id, self.author_id, region_pings=payload)
 
 
 # ==================================================
@@ -785,7 +828,7 @@ class TypeRegionPings(commands.Cog):
                 ctx.author.id,
                 payload,
             )
-            await refresh_tp_qp_cache(db)
+            await apply_tp_qp_cache_user(ctx.guild.id, ctx.author.id, type_pings=payload)
             return await ctx.send(
                 f"✅ {action} type pings: "
                 f"{', '.join(name.capitalize() for name in sorted(requested))}."
@@ -838,7 +881,7 @@ class TypeRegionPings(commands.Cog):
                 ctx.author.id,
                 payload,
             )
-            await refresh_tp_qp_cache(db)
+            await apply_tp_qp_cache_user(ctx.guild.id, ctx.author.id, region_pings=payload)
             return await ctx.send(
                 f"✅ {action} region pings: "
                 f"{', '.join(name.capitalize() for name in sorted(requested))}."
@@ -958,31 +1001,12 @@ class TypeRegionPings(commands.Cog):
                 ctx.author.id,
                 sorted(UNKNOWN_GENDER_POKEMON),
             )
-            await refresh_collection_cache(db)
-        await self._sync_active_quest_pings(ctx.guild.id, ctx.author.id)
-        if ctx.guild.id in GRIND_SUPPORT_SERVER_IDS:
-            type_requirements = {}
-            region_requirements = {}
-            for quest in state["quests"]:
-                if quest["kind"] not in {"type", "region"}:
-                    continue
-                target = (
-                    type_requirements
-                    if quest["kind"] == "type"
-                    else region_requirements
-                )
-                target[quest["name"]] = max(
-                    quest["remaining"], target.get(quest["name"], 0)
-                )
-            await set_quest_requirements(
+            await apply_collection_cache_names(
                 ctx.guild.id,
                 ctx.author.id,
-                type_requirements,
-                region_requirements,
-                replace_types=True,
+                sorted(UNKNOWN_GENDER_POKEMON),
             )
-
-        active = await self._load_quest_state(ctx.guild.id, ctx.author.id)
+        active = await self._sync_active_quest_pings(ctx.guild.id, ctx.author.id)
         active_names = len(active.get("active", []))
         response = f"✅ Stored {len(state['quests'])} catch quests and started {active_names} quest ping(s)."
         if settings.get("non_catch", "before") == "after" and non_catch:
@@ -1021,6 +1045,8 @@ class TypeRegionPings(commands.Cog):
                 )
         if not new_types and not new_regions:
             return await ctx.send("❌ No type or region quests were found for grind support.")
+        type_payload = build_ping_payload(new_types, "types", get_pokemons_for_types)
+        region_payload = build_ping_payload(new_regions, "regions", get_pokemons_for_regions)
         await db.execute(
             """
             INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
@@ -1031,10 +1057,15 @@ class TypeRegionPings(commands.Cog):
             """,
             ctx.guild.id,
             ctx.author.id,
-            build_ping_payload(new_types, "types", get_pokemons_for_types),
-            build_ping_payload(new_regions, "regions", get_pokemons_for_regions),
+            type_payload,
+            region_payload,
         )
-        await refresh_tp_qp_cache(db)
+        await apply_tp_qp_cache_user(
+            ctx.guild.id,
+            ctx.author.id,
+            type_pings=type_payload,
+            region_pings=region_payload,
+        )
         await set_quest_requirements(
             ctx.guild.id,
             ctx.author.id,
@@ -1142,6 +1173,16 @@ class TypeRegionPings(commands.Cog):
         remaining_types: dict[str, int],
         remaining_regions: dict[str, int],
     ):
+        type_payload = build_ping_payload(
+            [name for name, remaining in remaining_types.items() if remaining > 0],
+            "types",
+            get_pokemons_for_types,
+        )
+        region_payload = build_ping_payload(
+            [name for name, remaining in remaining_regions.items() if remaining > 0],
+            "regions",
+            get_pokemons_for_regions,
+        )
         await set_quest_requirements(
             server_id,
             user_id,
@@ -1159,18 +1200,15 @@ class TypeRegionPings(commands.Cog):
             """,
             server_id,
             user_id,
-            build_ping_payload(
-                [name for name, remaining in remaining_types.items() if remaining > 0],
-                "types",
-                get_pokemons_for_types,
-            ),
-            build_ping_payload(
-                [name for name, remaining in remaining_regions.items() if remaining > 0],
-                "regions",
-                get_pokemons_for_regions,
-            ),
+            type_payload,
+            region_payload,
         )
-        await refresh_tp_qp_cache(db)
+        await apply_tp_qp_cache_user(
+            server_id,
+            user_id,
+            type_pings=type_payload,
+            region_pings=region_payload,
+        )
 
     def _resolve_guild_channel(self, guild, channel_id: int):
         getter = getattr(guild, "get_channel_or_thread", None)
@@ -1214,14 +1252,19 @@ class TypeRegionPings(commands.Cog):
             ctx.guild.id,
             ctx.author.id,
         )
-        await refresh_tp_qp_cache(db)
+        await apply_tp_qp_cache_user(
+            ctx.guild.id,
+            ctx.author.id,
+            type_pings=None,
+            region_pings=None,
+        )
         await set_quest_requirements(
             ctx.guild.id, ctx.author.id, {}, {}, replace_types=True
         )
         await ctx.send("✅ Cleared your grind-support event pings.")
 
     async def _clear_event_pings(self, ctx):
-        async with _QUEST_STATE_LOCK:
+        async with _quest_user_lock(ctx.guild.id, ctx.author.id):
             state = await self._load_quest_state(ctx.guild.id, ctx.author.id)
             if (
                 not state.get("quests")
@@ -1250,8 +1293,19 @@ class TypeRegionPings(commands.Cog):
                     ctx.author.id,
                     added_collection,
                 )
-                await refresh_collection_cache(db)
+                await apply_collection_cache_names(
+                    ctx.guild.id,
+                    ctx.author.id,
+                    added_collection,
+                    remove=True,
+                )
 
+            type_payload = build_ping_payload(
+                base_types, "types", get_pokemons_for_types
+            )
+            region_payload = build_ping_payload(
+                base_regions, "regions", get_pokemons_for_regions
+            )
             await db.execute(
                 """
                 INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
@@ -1262,10 +1316,15 @@ class TypeRegionPings(commands.Cog):
                 """,
                 ctx.guild.id,
                 ctx.author.id,
-                build_ping_payload(base_types, "types", get_pokemons_for_types),
-                build_ping_payload(base_regions, "regions", get_pokemons_for_regions),
+                type_payload,
+                region_payload,
             )
-            await refresh_tp_qp_cache(db)
+            await apply_tp_qp_cache_user(
+                ctx.guild.id,
+                ctx.author.id,
+                type_pings=type_payload,
+                region_pings=region_payload,
+            )
             await self._save_quest_state(ctx.guild.id, ctx.author.id, {})
             if ctx.guild.id in GRIND_SUPPORT_SERVER_IDS:
                 await set_quest_requirements(
@@ -1290,22 +1349,22 @@ class TypeRegionPings(commands.Cog):
 
     async def _save_quest_settings(self, server_id: int, user_id: int, settings: dict):
         async with _QUEST_FILE_LOCK:
-            data = self._read_quest_data()
+            data = _ensure_quest_data()
             entry = data.setdefault(self._quest_user_key(server_id, user_id), {})
             entry["settings"] = settings
-            self._write_quest_data(data)
+            _schedule_quest_data_write()
 
     async def _load_quest_state(self, server_id: int, user_id: int) -> dict:
         data = await self._load_quest_data()
         state = data.get(self._quest_user_key(server_id, user_id), {}).get("state", {})
-        return state if isinstance(state, dict) else {}
+        return deepcopy(state) if isinstance(state, dict) else {}
 
     async def _save_quest_state(self, server_id: int, user_id: int, state: dict):
         async with _QUEST_FILE_LOCK:
-            data = self._read_quest_data()
+            data = _ensure_quest_data()
             entry = data.setdefault(self._quest_user_key(server_id, user_id), {})
-            entry["state"] = state
-            self._write_quest_data(data)
+            entry["state"] = deepcopy(state)
+            _schedule_quest_data_write()
 
     @staticmethod
     def _quest_user_key(server_id: int, user_id: int) -> str:
@@ -1313,7 +1372,7 @@ class TypeRegionPings(commands.Cog):
 
     async def _load_quest_data(self) -> dict:
         async with _QUEST_FILE_LOCK:
-            return self._read_quest_data()
+            return _ensure_quest_data()
 
     @staticmethod
     def _read_quest_data() -> dict:
@@ -1334,12 +1393,11 @@ class TypeRegionPings(commands.Cog):
     def _write_quest_data(data: dict):
         temporary_file = f"{QUEST_DATA_FILE}.tmp"
         with open(temporary_file, "w", encoding="utf-8") as file:
-            json.dump(data, file, indent=2)
-            file.write("\n")
+            json.dump(data, file, separators=(",", ":"))
         os.replace(temporary_file, QUEST_DATA_FILE)
 
     async def _sync_active_quest_pings(self, server_id: int, user_id: int):
-        async with _QUEST_STATE_LOCK:
+        async with _quest_user_lock(server_id, user_id):
             state = await self._load_quest_state(server_id, user_id)
             settings = await self._load_quest_settings(server_id, user_id)
             pending = [quest for quest in state.get("quests", []) if quest.get("remaining", 0) > 0]
@@ -1347,7 +1405,6 @@ class TypeRegionPings(commands.Cog):
             active = pending if max_active == 0 else pending[:max_active]
             state["quests"] = pending
             state["active"] = active
-            await self._save_quest_state(server_id, user_id, state)
 
             row = await db.fetchrow(
                 "SELECT type_pings, region_pings FROM tp_qp WHERE serverid = $1 AND userid = $2",
@@ -1368,6 +1425,11 @@ class TypeRegionPings(commands.Cog):
                     region_names.add(quest["name"])
             state["_synced_active"] = deepcopy(active)
             await self._save_quest_state(server_id, user_id, state)
+            type_payload, region_payload = await asyncio.to_thread(
+                _build_type_region_payloads,
+                type_names,
+                region_names,
+            )
             await db.execute(
                 """
                 INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
@@ -1376,10 +1438,16 @@ class TypeRegionPings(commands.Cog):
                 DO UPDATE SET type_pings = EXCLUDED.type_pings, region_pings = EXCLUDED.region_pings
                 """,
                 server_id, user_id,
-                build_ping_payload(type_names, "types", get_pokemons_for_types),
-                build_ping_payload(region_names, "regions", get_pokemons_for_regions),
+                type_payload,
+                region_payload,
             )
-            await refresh_tp_qp_cache(db)
+            await apply_tp_qp_cache_user(
+                server_id,
+                user_id,
+                type_pings=type_payload,
+                region_pings=region_payload,
+            )
+        return state
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -1406,7 +1474,7 @@ class TypeRegionPings(commands.Cog):
         if not match:
             return
         code = match.group(1).casefold()
-        async with _QUEST_STATE_LOCK:
+        async with _quest_user_lock(guild.id, user.id):
             state = await self._load_quest_state(guild.id, user.id)
             if not remove_completed_quests(state, code):
                 return

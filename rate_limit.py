@@ -39,9 +39,14 @@ class RateLimitLogger:
 
         try:
             timestamp = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
-            async with self._file_lock:
+            line = f"Rate limited at {timestamp}\n"
+
+            def _append():
                 with RATE_LIMIT_LOG_FILE.open("a", encoding="utf-8") as log_file:
-                    log_file.write(f"Rate limited at {timestamp}\n")
+                    log_file.write(line)
+
+            async with self._file_lock:
+                await asyncio.to_thread(_append)
 
             print(f"Discord rate limit recorded at {timestamp}")
         except OSError as error:

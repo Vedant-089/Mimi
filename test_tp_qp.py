@@ -233,6 +233,7 @@ def test_grind_support_limits_overlapping_type_and_region_pings():
                 "types": {"dark": 18},
                 "regions": {"sinnoh": 18},
             }
+            functions._quest_requirements_loaded = True
 
         results = []
         for _ in range(19):
@@ -470,6 +471,7 @@ def test_grind_support_backfill_requires_a_matching_remaining_quest():
                 "types": {"dark": 1},
                 "regions": {},
             }
+            functions._quest_requirements_loaded = True
 
         return await functions.limit_quest_ping_users(
             server_id,
