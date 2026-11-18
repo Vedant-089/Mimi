@@ -1,5 +1,3 @@
-import asyncio
-import json
 import re
 from pathlib import Path
 
@@ -12,8 +10,6 @@ from functions import set_only_ping_enabled
 
 POKETWO_BOT_ID = 716390085896962058
 OWNER_ID = 760720549092917248
-TYPE_SETTINGS_PATH = Path("type_settings.json")
-TYPE_CHANNELS_PATH = Path("type_channels.json")
 CATCH_RE = re.compile(
     r"^Congratulations\s+<@!?([0-9]+)>!\s+You caught a Level",
     re.IGNORECASE,
@@ -43,7 +39,6 @@ def format_pokemon_name(name: str) -> str:
 class Starboard(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.type_channels_lock = asyncio.Lock()
 
     @commands.command(name="op")
     async def only_ping(self, ctx: commands.Context, value: str = ""):
@@ -64,55 +59,6 @@ class Starboard(commands.Cog):
 
         state = "enabled" if value == "true" else "disabled"
         await ctx.send(f"✅ Only-ping naming is now **{state}**.")
-
-    def is_type_enabled(self) -> bool:
-        try:
-            with TYPE_SETTINGS_PATH.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            return bool(data.get("type", data.get("enabled", True)))
-        except FileNotFoundError:
-            return True
-        except Exception as error:
-            print(f"⚠️ Failed to read {TYPE_SETTINGS_PATH}: {error}")
-            return True
-
-    def _read_type_channel_data(self):
-        if not TYPE_CHANNELS_PATH.exists():
-            return {}
-        try:
-            with TYPE_CHANNELS_PATH.open("r", encoding="utf-8") as f:
-                existing = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {}
-
-        data = {}
-        for type_name, channel_ids in existing.items():
-            cleaned_ids = []
-            for channel_id in channel_ids:
-                try:
-                    channel_int = int(channel_id)
-                except (TypeError, ValueError):
-                    continue
-                if channel_int not in cleaned_ids:
-                    cleaned_ids.append(channel_int)
-            data[type_name] = cleaned_ids
-        return data
-
-    def _write_type_channel_data(self, data):
-        with TYPE_CHANNELS_PATH.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, sort_keys=True)
-
-    async def _remove_channel_from_all_types(self, channel_id: int):
-        async with self.type_channels_lock:
-            data = await asyncio.to_thread(self._read_type_channel_data)
-            changed = False
-            for type_name in list(data.keys()):
-                filtered_ids = [saved_id for saved_id in data[type_name] if saved_id != channel_id]
-                if len(filtered_ids) != len(data[type_name]):
-                    data[type_name] = filtered_ids
-                    changed = True
-            if changed:
-                await asyncio.to_thread(self._write_type_channel_data, data)
 
     async def send_starboard_catch(self, message: discord.Message):
         match = CATCH_DETAILS_RE.search(message.content or "")
@@ -199,12 +145,6 @@ class Starboard(commands.Cog):
             await self.send_starboard_catch(message)
         except Exception as error:
             print(f"⚠️ Failed to process starboard catch: {error}")
-
-        if self.is_type_enabled():
-            try:
-                await self._remove_channel_from_all_types(message.channel.id)
-            except Exception as error:
-                print(f"⚠️ Failed to remove channel after catch: {error}")
 
 
 async def setup(bot: commands.Bot):

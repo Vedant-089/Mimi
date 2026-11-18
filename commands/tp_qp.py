@@ -6,23 +6,18 @@ import csv
 import os
 from collections import defaultdict
 from copy import deepcopy
-from pathlib import Path
 import discord
 from discord.ext import commands
 from database import db
 from functions import (
-    GRIND_SUPPORT_SERVER_IDS,
     apply_collection_cache_names,
     apply_tp_qp_cache_user,
-    get_grind_support_users,
     is_suspended,
-    set_quest_requirements,
 )
 
 LOGGER = logging.getLogger(__name__)
 QUEST_COMPLETION_BOT_ID = 716390085896962058
 QUEST_DATA_FILE = "quest_data.json"
-TYPE_CHANNELS_FILE = Path(__file__).resolve().parent.parent / "type_channels.json"
 _QUEST_FILE_LOCK = asyncio.Lock()
 _quest_user_locks = defaultdict(asyncio.Lock)
 _quest_data = None
@@ -436,84 +431,6 @@ def build_ping_payload(names, key_name, pokemon_resolver):
     })
 
 
-def matching_saved_channel_ids(channel_data, names) -> list[int]:
-    """Return unique type_channels.json IDs for the requested type/region names."""
-    return [channel_id for channel_id, _, _ in tagged_saved_channels(channel_data, names, [])]
-
-
-def _parse_saved_channel_ids(saved_ids):
-    if isinstance(saved_ids, (int, str)):
-        saved_ids = [saved_ids]
-    if not isinstance(saved_ids, (list, tuple, set)):
-        return []
-    parsed_ids = []
-    seen = set()
-    for channel_id in saved_ids:
-        try:
-            parsed_id = int(channel_id)
-        except (TypeError, ValueError):
-            continue
-        if parsed_id in seen:
-            continue
-        seen.add(parsed_id)
-        parsed_ids.append(parsed_id)
-    return parsed_ids
-
-
-def _unique_casefold_names(names):
-    ordered = []
-    seen = set()
-    for name in names:
-        key = str(name).casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        ordered.append(key)
-    return ordered
-
-
-def tagged_saved_channels(channel_data, type_names, region_names):
-    """Return unique saved channels with the type/region quests they can fill."""
-    if not isinstance(channel_data, dict):
-        return []
-
-    normalized = {
-        str(name).casefold(): _parse_saved_channel_ids(saved_ids)
-        for name, saved_ids in channel_data.items()
-    }
-    type_order = _unique_casefold_names(type_names)
-    region_order = _unique_casefold_names(region_names)
-    type_set = set(type_order)
-    tagged = {}
-    order = []
-    for name in (*type_order, *region_order):
-        kind = "types" if name in type_set else "regions"
-        for channel_id in normalized.get(name, []):
-            if channel_id not in tagged:
-                tagged[channel_id] = {"types": set(), "regions": set()}
-                order.append(channel_id)
-            tagged[channel_id][kind].add(name)
-    return [
-        (channel_id, tagged[channel_id]["types"], tagged[channel_id]["regions"])
-        for channel_id in order
-    ]
-
-
-def consume_channel_quest_quota(remaining_types, remaining_regions, channel_types, channel_regions):
-    """Return the type/region quotas this one channel ping should consume, if any."""
-    consume_types = {
-        name for name in channel_types
-        if remaining_types.get(name, 0) > 0
-    }
-    consume_regions = {
-        name for name in channel_regions
-        if remaining_regions.get(name, 0) > 0
-    }
-    if not consume_types and not consume_regions:
-        return set(), set()
-    return consume_types, consume_regions
-
-
 def parse_ping_arguments(arguments, valid_names):
     tokens = [
         token.strip().casefold()
@@ -906,18 +823,12 @@ class TypeRegionPings(commands.Cog):
             )
 
         if action.casefold() == "clear":
-            if await self._grind_support_enabled(ctx.guild.id, ctx.author.id):
-                return await self._clear_grind_support_event_pings(ctx)
             return await self._clear_event_pings(ctx)
         if action:
             return await ctx.send("❌ Use `m!ev clear` or reply to a quest embed.")
 
         reference = ctx.message.reference
         if reference is None or reference.message_id is None:
-            if await self._grind_support_enabled(ctx.guild.id, ctx.author.id):
-                return await ctx.send(
-                    "❌ Reply to a quest embed to start grind-support event pings."
-                )
             settings = await self._load_quest_settings(ctx.guild.id, ctx.author.id)
             view = QuestSettingsView(self, ctx.guild.id, ctx.author.id, settings)
             return await ctx.send(embed=view.build_embed(), view=view)
@@ -939,8 +850,6 @@ class TypeRegionPings(commands.Cog):
             return await ctx.send("❌ I could not read the replied-to message.")
 
         quests, non_catch = parse_event_quests(replied_message)
-        if await self._grind_support_enabled(ctx.guild.id, ctx.author.id):
-            return await self._start_grind_support_event(ctx, quests, non_catch)
         settings = await self._load_quest_settings(ctx.guild.id, ctx.author.id)
         if settings.get("non_catch", "before") == "before" and non_catch:
             return await ctx.send(
@@ -1016,253 +925,6 @@ class TypeRegionPings(commands.Cog):
             )
         await ctx.send(response)
 
-    async def _grind_support_enabled(self, server_id: int, user_id: int) -> bool:
-        if server_id not in GRIND_SUPPORT_SERVER_IDS:
-            return False
-        return user_id in await get_grind_support_users(db, server_id)
-
-    async def _start_grind_support_event(self, ctx, quests, non_catch):
-        print(
-            f"[m!ev] starting grind-support event guild={ctx.guild.id} "
-            f"user={ctx.author.id} quests={len(quests)}"
-        )
-        type_requirements = {}
-        region_requirements = {}
-        new_types = set()
-        new_regions = set()
-        for quest in quests:
-            if quest["kind"] == "type":
-                new_types.add(quest["name"])
-                type_requirements[quest["name"]] = max(
-                    quest["remaining"],
-                    type_requirements.get(quest["name"], 0),
-                )
-            elif quest["kind"] == "region":
-                new_regions.add(quest["name"])
-                region_requirements[quest["name"]] = max(
-                    quest["remaining"],
-                    region_requirements.get(quest["name"], 0),
-                )
-        if not new_types and not new_regions:
-            return await ctx.send("❌ No type or region quests were found for grind support.")
-        type_payload = build_ping_payload(new_types, "types", get_pokemons_for_types)
-        region_payload = build_ping_payload(new_regions, "regions", get_pokemons_for_regions)
-        await db.execute(
-            """
-            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (serverid, userid)
-            DO UPDATE SET type_pings = EXCLUDED.type_pings,
-                          region_pings = EXCLUDED.region_pings
-            """,
-            ctx.guild.id,
-            ctx.author.id,
-            type_payload,
-            region_payload,
-        )
-        await apply_tp_qp_cache_user(
-            ctx.guild.id,
-            ctx.author.id,
-            type_pings=type_payload,
-            region_pings=region_payload,
-        )
-        await set_quest_requirements(
-            ctx.guild.id,
-            ctx.author.id,
-            type_requirements,
-            region_requirements,
-            replace_types=True,
-        )
-        backfilled = await self._notify_existing_grind_support_channels(
-            ctx,
-            type_requirements,
-            region_requirements,
-        )
-        await ctx.send(
-            "✅ Grind support event pings started — "
-            f"{len(new_types)} type and {len(new_regions)} region quest(s)."
-            + (f" Pinged {backfilled} matching spawn channel(s)." if backfilled else "")
-        )
-
-    async def _notify_existing_grind_support_channels(
-        self,
-        ctx,
-        type_requirements: dict[str, int],
-        region_requirements: dict[str, int],
-    ) -> int:
-        """Ping at most the remaining needed count per type/region in this guild.
-
-        A channel saved under both a needed type and a needed region is pinged
-        once. Each successful ping decreases every matching remaining count by 1.
-        """
-        channel_data = await asyncio.to_thread(self._read_type_channel_data)
-        remaining_types = {
-            str(name).casefold(): max(0, int(remaining))
-            for name, remaining in type_requirements.items()
-        }
-        remaining_regions = {
-            str(name).casefold(): max(0, int(remaining))
-            for name, remaining in region_requirements.items()
-        }
-        candidates = tagged_saved_channels(
-            channel_data,
-            remaining_types,
-            remaining_regions,
-        )
-        sent_count = 0
-        unresolved = 0
-        for channel_id, channel_types, channel_regions in candidates:
-            consume_types, consume_regions = consume_channel_quest_quota(
-                remaining_types,
-                remaining_regions,
-                channel_types,
-                channel_regions,
-            )
-            if not consume_types and not consume_regions:
-                continue
-            channel = self._resolve_guild_channel(ctx.guild, channel_id)
-            if channel is None:
-                unresolved += 1
-                continue
-            try:
-                await channel.send(ctx.author.mention)
-            except (discord.Forbidden, discord.HTTPException):
-                LOGGER.warning(
-                    "Could not send grind-support event ping to channel %s",
-                    channel.id,
-                )
-                continue
-            for name in consume_types:
-                remaining_types[name] -= 1
-            for name in consume_regions:
-                remaining_regions[name] -= 1
-            sent_count += 1
-            print(
-                f"[m!ev] sent one channel ping channel={channel.id} "
-                f"consumed_types={sorted(consume_types)} "
-                f"consumed_regions={sorted(consume_regions)}"
-            )
-
-        await self._persist_grind_support_remaining(
-            ctx.guild.id,
-            ctx.author.id,
-            remaining_types,
-            remaining_regions,
-        )
-        print(
-            f"[m!ev] channel notify guild={ctx.guild.id} user={ctx.author.id} "
-            f"candidates={len(candidates)} sent={sent_count} "
-            f"unresolved={unresolved} remaining_types={remaining_types} "
-            f"remaining_regions={remaining_regions} file={TYPE_CHANNELS_FILE}"
-        )
-        if candidates and sent_count == 0:
-            LOGGER.warning(
-                "Grind-support event found %s saved channel id(s) for %s/%s "
-                "but none were visible in guild %s",
-                len(candidates),
-                sorted(type_requirements),
-                sorted(region_requirements),
-                ctx.guild.id,
-            )
-        return sent_count
-
-    async def _persist_grind_support_remaining(
-        self,
-        server_id: int,
-        user_id: int,
-        remaining_types: dict[str, int],
-        remaining_regions: dict[str, int],
-    ):
-        type_payload = build_ping_payload(
-            [name for name, remaining in remaining_types.items() if remaining > 0],
-            "types",
-            get_pokemons_for_types,
-        )
-        region_payload = build_ping_payload(
-            [name for name, remaining in remaining_regions.items() if remaining > 0],
-            "regions",
-            get_pokemons_for_regions,
-        )
-        await set_quest_requirements(
-            server_id,
-            user_id,
-            remaining_types,
-            remaining_regions,
-            replace_types=True,
-        )
-        await db.execute(
-            """
-            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (serverid, userid)
-            DO UPDATE SET type_pings = EXCLUDED.type_pings,
-                          region_pings = EXCLUDED.region_pings
-            """,
-            server_id,
-            user_id,
-            type_payload,
-            region_payload,
-        )
-        await apply_tp_qp_cache_user(
-            server_id,
-            user_id,
-            type_pings=type_payload,
-            region_pings=region_payload,
-        )
-
-    def _resolve_guild_channel(self, guild, channel_id: int):
-        getter = getattr(guild, "get_channel_or_thread", None)
-        channel = getter(channel_id) if getter else None
-        if channel is None:
-            channel = guild.get_channel(channel_id)
-        if channel is None:
-            get_thread = getattr(guild, "get_thread", None)
-            if get_thread:
-                channel = get_thread(channel_id)
-        if channel is None:
-            channel = self.bot.get_channel(channel_id)
-        channel_guild = getattr(channel, "guild", None)
-        if channel is None or channel_guild is None or channel_guild.id != guild.id:
-            return None
-        return channel
-
-    @staticmethod
-    def _read_type_channel_data():
-        try:
-            with TYPE_CHANNELS_FILE.open("r", encoding="utf-8") as file:
-                data = json.load(file)
-        except FileNotFoundError:
-            LOGGER.warning("type_channels.json was not found at %s", TYPE_CHANNELS_FILE)
-            return {}
-        except (OSError, json.JSONDecodeError):
-            LOGGER.exception("Failed to read type channel map from %s", TYPE_CHANNELS_FILE)
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return data
-
-    async def _clear_grind_support_event_pings(self, ctx):
-        await db.execute(
-            """
-            INSERT INTO tp_qp (serverid, userid, type_pings, region_pings)
-            VALUES ($1, $2, NULL, NULL)
-            ON CONFLICT (serverid, userid)
-            DO UPDATE SET type_pings = NULL, region_pings = NULL
-            """,
-            ctx.guild.id,
-            ctx.author.id,
-        )
-        await apply_tp_qp_cache_user(
-            ctx.guild.id,
-            ctx.author.id,
-            type_pings=None,
-            region_pings=None,
-        )
-        await set_quest_requirements(
-            ctx.guild.id, ctx.author.id, {}, {}, replace_types=True
-        )
-        await ctx.send("✅ Cleared your grind-support event pings.")
-
     async def _clear_event_pings(self, ctx):
         async with _quest_user_lock(ctx.guild.id, ctx.author.id):
             state = await self._load_quest_state(ctx.guild.id, ctx.author.id)
@@ -1326,10 +988,6 @@ class TypeRegionPings(commands.Cog):
                 region_pings=region_payload,
             )
             await self._save_quest_state(ctx.guild.id, ctx.author.id, {})
-            if ctx.guild.id in GRIND_SUPPORT_SERVER_IDS:
-                await set_quest_requirements(
-                    ctx.guild.id, ctx.author.id, {}, {}, replace_types=True
-                )
         await ctx.send("✅ Cleared your event quests and event-added pings.")
 
     async def _load_quest_settings(self, server_id: int, user_id: int) -> dict:

@@ -29,3 +29,5 @@ DONE COMPLETELY
    disk I/O (only_ping, type_channels, incense, 429 log, prints), full cache
    rebuilds on m!ev. Discord’s global ~50 req/s bucket still applies to naming
    POSTs; we cannot remove that without slowing names. Restart the bot to load.
+8. Removed grind-support entirely (m!gs, pause/resume, per-spawn Pokétwo mute,
+   3-server-only type-channel sync, gs m!ev path). m!ev is default-only.

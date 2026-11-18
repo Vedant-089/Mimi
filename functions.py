@@ -2,74 +2,12 @@ import time
 import asyncio
 import copy
 import json
-import logging
 import discord
 from collections import defaultdict
 
 ALLOWED_ROLES_FILE = "allowed_roles.json"
 SUSPENDED_USERS_FILE = "suspended.json"
 ONLY_PING_FILE = "only_ping.json"
-POKETWO_BOT_ID = 716390085896962058
-GRIND_SUPPORT_SERVER_IDS = frozenset({
-    1322103302888095837,
-    1429413142319988788,
-    1429413395769065614,
-})
-
-_poketwo_permission_cache = {}
-_poketwo_permission_locks = defaultdict(asyncio.Lock)
-_poketwo_member_cache = {}
-_poketwo_member_locks = defaultdict(asyncio.Lock)
-
-
-async def _get_poketwo_member(guild):
-    member = _poketwo_member_cache.get(guild.id) or guild.get_member(
-        POKETWO_BOT_ID
-    )
-    if member is not None:
-        _poketwo_member_cache[guild.id] = member
-        return member
-
-    async with _poketwo_member_locks[guild.id]:
-        member = _poketwo_member_cache.get(guild.id) or guild.get_member(
-            POKETWO_BOT_ID
-        )
-        if member is None:
-            member = await guild.fetch_member(POKETWO_BOT_ID)
-        _poketwo_member_cache[guild.id] = member
-        return member
-
-
-async def set_poketwo_send_permission(
-    guild,
-    channel,
-    allowed: bool | None,
-    *,
-    force: bool = False,
-):
-    if guild is None or guild.id not in GRIND_SUPPORT_SERVER_IDS:
-        return False
-
-    if isinstance(channel, discord.Thread):
-        channel = channel.parent
-    if channel is None:
-        return False
-
-    cache_key = (guild.id, channel.id)
-    async with _poketwo_permission_locks[cache_key]:
-        if not force and allowed is False and _poketwo_permission_cache.get(cache_key) is False:
-            return False
-
-        poketwo = await _get_poketwo_member(guild)
-
-        await channel.set_permissions(
-            poketwo,
-            send_messages=allowed,
-            reason="Grind support channel control",
-        )
-        _poketwo_permission_cache[cache_key] = allowed
-        return True
-
 
 _only_ping_cached = None
 
@@ -166,8 +104,6 @@ async def wipe_user_data(db_instance, user_id: int):
         "collection_pings",
         "reserve_pings",
         "shiny_hunt",
-        "server_grind_support",
-        "grind_support",
         "server_shiny_hunt",
         "tp_qp",
     ):
@@ -195,32 +131,6 @@ _type_ping_cache = defaultdict(lambda: defaultdict(list))
 _region_ping_cache = defaultdict(lambda: defaultdict(list))
 _tp_qp_cache_last_updated = 0
 _tp_qp_cache_lock = asyncio.Lock()
-_grind_support_cache = {}
-_grind_support_cache_lock = asyncio.Lock()
-_quest_requirements = defaultdict(
-    lambda: {"types": {}, "regions": {}}
-)
-_quest_requirements_lock = asyncio.Lock()
-_QUEST_REQUIREMENTS_FILE = "grind_support_quests.json"
-_quest_requirements_loaded = False
-_quest_requirements_write_task = None
-LOGGER = logging.getLogger(__name__)
-with open("typing.json", "r", encoding="utf-8") as _typing_file:
-    _type_pokemon_names = {
-        type_name: {
-            pokemon_name.lower().strip()
-            for pokemon_name in pokemon_names
-        }
-        for type_name, pokemon_names in json.load(_typing_file).items()
-    }
-with open("region.json", "r", encoding="utf-8") as _region_file:
-    _region_pokemon_names = {
-        region_name: {
-            pokemon_name.lower().strip()
-            for pokemon_name in pokemon_names
-        }
-        for region_name, pokemon_names in json.load(_region_file).items()
-    }
 _server_settings_cache = {}
 _server_settings_cache_lock = asyncio.Lock()
 PING_TABLES_SQL = [
@@ -245,36 +155,7 @@ PING_TABLES_SQL = [
         userid BIGINT PRIMARY KEY,
         pokemon_name TEXT,
         shinyafk BOOLEAN DEFAULT FALSE,
-        colafk BOOLEAN DEFAULT FALSE,
-        grind_support BOOLEAN DEFAULT FALSE
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS grind_support (
-        id BIGSERIAL PRIMARY KEY,
-        guildid BIGINT,
-        channelid BIGINT NOT NULL,
-        messageid BIGINT,
-        pokemon_name TEXT NOT NULL,
-        userid BIGINT NOT NULL,
-        spawn_order BIGINT NOT NULL,
-        UNIQUE (userid, spawn_order)
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS grind_support_spawns (
-        spawn_order BIGSERIAL PRIMARY KEY,
-        guildid BIGINT NOT NULL,
-        channelid BIGINT NOT NULL,
-        messageid BIGINT NOT NULL UNIQUE,
-        pokemon_name TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS server_grind_support (
-        serverid BIGINT NOT NULL,
-        userid BIGINT NOT NULL,
-        PRIMARY KEY (serverid, userid)
+        colafk BOOLEAN DEFAULT FALSE
     );
     """,
     """
@@ -320,14 +201,11 @@ async def ensure_ping_tables(db_instance):
         "ALTER TABLE shiny_hunt ADD COLUMN IF NOT EXISTS colafk BOOLEAN DEFAULT FALSE;"
     )
     await db_instance.execute(
-        "ALTER TABLE shiny_hunt ADD COLUMN IF NOT EXISTS grind_support BOOLEAN DEFAULT FALSE;"
+        "ALTER TABLE shiny_hunt DROP COLUMN IF EXISTS grind_support;"
     )
-    await db_instance.execute(
-        "ALTER TABLE grind_support ADD COLUMN IF NOT EXISTS guildid BIGINT;"
-    )
-    await db_instance.execute(
-        "ALTER TABLE grind_support ADD COLUMN IF NOT EXISTS messageid BIGINT;"
-    )
+    await db_instance.execute("DROP TABLE IF EXISTS grind_support;")
+    await db_instance.execute("DROP TABLE IF EXISTS grind_support_spawns;")
+    await db_instance.execute("DROP TABLE IF EXISTS server_grind_support;")
     await db_instance.execute(
         """
         DO $$
@@ -355,13 +233,6 @@ async def ensure_ping_tables(db_instance):
     )
     await db_instance.execute(
         "CREATE INDEX IF NOT EXISTS reserve_pings_server_pokemon_idx ON reserve_pings (serverid, pokemon_name);"
-    )
-    await db_instance.execute(
-        "CREATE INDEX IF NOT EXISTS grind_support_user_order_idx ON grind_support (userid, spawn_order);"
-    )
-    await db_instance.execute(
-        "CREATE INDEX IF NOT EXISTS grind_support_spawns_guild_channel_idx "
-        "ON grind_support_spawns (guildid, channelid, spawn_order);"
     )
 
 
@@ -810,339 +681,15 @@ async def get_users_region_ping(pokemon_name: str, guild_id: int, db_instance):
     return list(set(guild_cache.get(name, [])))
 
 
-async def set_quest_requirements(
-    server_id: int,
-    user_id: int,
-    type_requirements: dict[str, int],
-    region_requirements: dict[str, int],
-    replace_types: bool = False,
-):
-    if server_id not in GRIND_SUPPORT_SERVER_IDS:
-        return
-
-    global _quest_requirements_loaded
-    async with _quest_requirements_lock:
-        await _load_quest_requirements_locked()
-        requirements = _quest_requirements[(server_id, user_id)]
-        if replace_types:
-            requirements["types"].clear()
-            requirements["regions"].clear()
-        for quest_type, remaining in type_requirements.items():
-            requirements["types"][quest_type.casefold()] = max(0, remaining)
-        for region, remaining in region_requirements.items():
-            requirements["regions"][region.casefold()] = max(0, remaining)
-        _quest_requirements_loaded = True
-        _schedule_quest_requirements_write()
-
-
-async def _load_quest_requirements_locked():
-    global _quest_requirements_loaded
-    if _quest_requirements_loaded:
-        return
-    try:
-        with open(_QUEST_REQUIREMENTS_FILE, "r", encoding="utf-8") as file:
-            data = json.load(file)
-    except FileNotFoundError:
-        data = {}
-    except (OSError, json.JSONDecodeError):
-        LOGGER.exception("Failed to load grind-support quest requirements")
-        data = {}
-
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if not isinstance(value, dict):
-                continue
-            try:
-                server_id, user_id = (int(part) for part in key.split(":", 1))
-            except (TypeError, ValueError):
-                continue
-            types = value.get("types", {})
-            regions = value.get("regions", {})
-            if not isinstance(types, dict) or not isinstance(regions, dict):
-                continue
-            _quest_requirements[(server_id, user_id)] = {
-                "types": {
-                    str(name).casefold(): max(0, int(remaining))
-                    for name, remaining in types.items()
-                    if isinstance(remaining, (int, float))
-                },
-                "regions": {
-                    str(name).casefold(): max(0, int(remaining))
-                    for name, remaining in regions.items()
-                    if isinstance(remaining, (int, float))
-                },
-            }
-    _quest_requirements_loaded = True
-
-
-def _quest_requirements_snapshot():
-    return {
-        f"{server_id}:{user_id}": {
-            "types": dict(requirements["types"]),
-            "regions": dict(requirements["regions"]),
-        }
-        for (server_id, user_id), requirements in _quest_requirements.items()
-    }
-
-
-def _write_quest_requirements_file(data: dict):
-    with open(_QUEST_REQUIREMENTS_FILE, "w", encoding="utf-8") as file:
-        json.dump(data, file, separators=(",", ":"))
-
-
-def _schedule_quest_requirements_write():
-    global _quest_requirements_write_task
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        try:
-            _write_quest_requirements_file(_quest_requirements_snapshot())
-        except OSError:
-            LOGGER.exception("Failed to save grind-support quest requirements")
-        return
-
-    if _quest_requirements_write_task is None or _quest_requirements_write_task.done():
-        _quest_requirements_write_task = loop.create_task(_flush_quest_requirements())
-
-
-async def _flush_quest_requirements():
-    await asyncio.sleep(0.1)
-    async with _quest_requirements_lock:
-        snapshot = _quest_requirements_snapshot()
-    try:
-        await asyncio.to_thread(_write_quest_requirements_file, snapshot)
-    except OSError:
-        LOGGER.exception("Failed to save grind-support quest requirements")
-
-
-async def limit_quest_ping_users(
-    server_id: int,
-    grind_support_users: set[int],
-    db_instance,
-    type_ping_users: list[int],
-    region_ping_users: list[int],
-    pokemon_types: list[str],
-    pokemon_regions: list[str],
-    require_matching_quest: bool = False,
-):
-    if server_id not in GRIND_SUPPORT_SERVER_IDS or not grind_support_users:
-        return type_ping_users, region_ping_users
-
-    pokemon_types = [str(name).casefold() for name in pokemon_types]
-    pokemon_regions = [str(name).casefold() for name in pokemon_regions]
-
-    async with _quest_requirements_lock:
-        await _load_quest_requirements_locked()
-        completed_types = defaultdict(set)
-        completed_regions = defaultdict(set)
-        requirements_changed = False
-        limited_type_users = []
-        for user_id in type_ping_users:
-            if user_id not in grind_support_users:
-                limited_type_users.append(user_id)
-                continue
-            requirements = _quest_requirements.get((server_id, user_id))
-            type_remaining = (
-                [
-                    requirements["types"][quest_type]
-                    for quest_type in pokemon_types
-                    if quest_type in requirements["types"]
-                ]
-                if requirements
-                else []
-            )
-            if require_matching_quest and not any(
-                remaining > 0 for remaining in type_remaining
-            ):
-                continue
-            if not type_remaining or any(remaining > 0 for remaining in type_remaining):
-                limited_type_users.append(user_id)
-                if requirements:
-                    for quest_type in pokemon_types:
-                        if requirements["types"].get(quest_type, 0) > 0:
-                            requirements["types"][quest_type] -= 1
-                            requirements_changed = True
-                            if requirements["types"][quest_type] == 0:
-                                completed_types[user_id].add(quest_type)
-
-        limited_region_users = []
-        for user_id in region_ping_users:
-            if user_id not in grind_support_users:
-                limited_region_users.append(user_id)
-                continue
-            requirements = _quest_requirements.get((server_id, user_id))
-            region_remaining = (
-                [
-                    requirements["regions"][region]
-                    for region in pokemon_regions
-                    if region in requirements["regions"]
-                ]
-                if requirements
-                else []
-            )
-            if require_matching_quest and not any(
-                remaining > 0 for remaining in region_remaining
-            ):
-                continue
-            if not region_remaining or any(remaining > 0 for remaining in region_remaining):
-                limited_region_users.append(user_id)
-                if requirements:
-                    for region in pokemon_regions:
-                        if requirements["regions"].get(region, 0) > 0:
-                            requirements["regions"][region] -= 1
-                            requirements_changed = True
-                            if requirements["regions"][region] == 0:
-                                completed_regions[user_id].add(region)
-
-        if requirements_changed:
-            _schedule_quest_requirements_write()
-
-        type_updates = list(completed_types.items())
-        region_updates = list(completed_regions.items())
-
-    for user_id, type_names in type_updates:
-        row = await db_instance.fetchrow(
-            """
-            SELECT type_pings
-            FROM tp_qp
-            WHERE serverid = $1 AND userid = $2
-            """,
-            server_id,
-            user_id,
-        )
-        if not row or not row["type_pings"]:
-            continue
-        try:
-            payload = json.loads(row["type_pings"])
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-
-        active_types = {
-            str(type_name).casefold()
-            for type_name in payload.get("types", [])
-        }
-        remaining_types = active_types - type_names
-        payload["types"] = sorted(remaining_types)
-        payload["pokemons"] = sorted(
-            {
-                pokemon_name
-                for type_name in remaining_types
-                for pokemon_name in _type_pokemon_names.get(type_name, set())
-            }
-        )
-        encoded = json.dumps(payload)
-        await db_instance.execute(
-            """
-            UPDATE tp_qp
-            SET type_pings = $3
-            WHERE serverid = $1 AND userid = $2
-            """,
-            server_id,
-            user_id,
-            encoded,
-        )
-        await apply_tp_qp_cache_user(server_id, user_id, type_pings=encoded)
-
-    for user_id, region_names in region_updates:
-        row = await db_instance.fetchrow(
-            """
-            SELECT region_pings
-            FROM tp_qp
-            WHERE serverid = $1 AND userid = $2
-            """,
-            server_id,
-            user_id,
-        )
-        if not row or not row["region_pings"]:
-            continue
-        try:
-            payload = json.loads(row["region_pings"])
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-
-        active_regions = {
-            str(region_name).casefold()
-            for region_name in payload.get("regions", [])
-        }
-        remaining_regions = active_regions - region_names
-        payload["regions"] = sorted(remaining_regions)
-        payload["pokemons"] = sorted(
-            {
-                pokemon_name
-                for region_name in remaining_regions
-                for pokemon_name in _region_pokemon_names.get(region_name, set())
-            }
-        )
-        encoded = json.dumps(payload)
-        await db_instance.execute(
-            """
-            UPDATE tp_qp
-            SET region_pings = $3
-            WHERE serverid = $1 AND userid = $2
-            """,
-            server_id,
-            user_id,
-            encoded,
-        )
-        await apply_tp_qp_cache_user(server_id, user_id, region_pings=encoded)
-
-    return limited_type_users, limited_region_users
-
-
-async def refresh_grind_support_cache(db_instance):
-    rows = await db_instance.fetch(
-        "SELECT serverid, userid FROM server_grind_support"
-    )
-    async with _grind_support_cache_lock:
-        _grind_support_cache.clear()
-        for row in rows:
-            _grind_support_cache.setdefault(row["serverid"], set()).add(row["userid"])
-
-
-async def get_grind_support_users(db_instance, server_id: int):
-    async with _grind_support_cache_lock:
-        cached = _grind_support_cache.get(server_id)
-        if cached is not None:
-            return set(cached)
-        rows = await db_instance.fetch(
-            """
-            SELECT userid
-            FROM server_grind_support
-            WHERE serverid = $1
-            """,
-            server_id,
-        )
-        users = {row["userid"] for row in rows}
-        _grind_support_cache[server_id] = users
-        return set(users)
-
-
-async def update_grind_support_cache(server_id: int, user_id: int, enabled: bool):
-    async with _grind_support_cache_lock:
-        users = _grind_support_cache.setdefault(server_id, set())
-        if enabled:
-            users.add(user_id)
-        else:
-            users.discard(user_id)
-
-
 async def warm_ping_caches(db_instance, server_ids=None):
-    async with _quest_requirements_lock:
-        await _load_quest_requirements_locked()
     await asyncio.gather(
         refresh_hunt_cache(db_instance, server_ids),
         refresh_collection_cache(db_instance),
         refresh_reserve_cache(db_instance),
         refresh_tp_qp_cache(db_instance),
-        refresh_grind_support_cache(db_instance),
         refresh_server_settings_cache(db_instance),
         warm_perk_cache(db_instance),
     )
-
 
 # ------------------------
 # Incense Tracking Functions

@@ -26,12 +26,8 @@ from functions import (
     get_users_reserved,
     get_users_type_ping,
     get_users_region_ping,
-    get_grind_support_users,
-    GRIND_SUPPORT_SERVER_IDS,
-    limit_quest_ping_users,
     get_server_spawn_settings,
     is_only_ping_enabled,
-    set_poketwo_send_permission,
     update_and_check_incense,
     parse_incense_footer,
     warm_ping_caches,
@@ -43,11 +39,6 @@ POKETWO_BOT_ID = 716390085896962058
 # do not enqueue all 400 POSTs ahead of m!ev / other commands.
 SPAWN_SEND_CONCURRENCY = 24
 INFERENCE_WORKERS = 16
-TYPE_CHANNEL_SYNC_GUILD_IDS = {
-    1322103302888095837,
-    1429413142319988788,
-    1429413395769065614,
-}
 MODEL_PATH = "pokemon_halloween_int8.onnx"
 IMG_SIZE = 224
 CONF_THRESHOLD = 0.30  # 30%
@@ -682,22 +673,6 @@ class SpawnPredictor(commands.Cog):
         if not naming_enabled:
             return
 
-        grind_support_users = set()
-        if message.guild.id in GRIND_SUPPORT_SERVER_IDS:
-            grind_support_users = await get_grind_support_users(
-                db,
-                message.guild.id,
-            )
-            perm_task = asyncio.create_task(
-                self._mute_poketwo_for_spawn(
-                    message.guild,
-                    message.channel,
-                )
-            )
-            perm_task.add_done_callback(
-                self._log_background_task_exception
-            )
-
         if not self.is_recognition_enabled():
             return
 
@@ -785,26 +760,6 @@ class SpawnPredictor(commands.Cog):
             if confidence < CONF_THRESHOLD:
                 return
 
-            if message.guild.id in GRIND_SUPPORT_SERVER_IDS:
-                spawn_insert = asyncio.create_task(
-                    db.execute(
-                        """
-                        INSERT INTO grind_support_spawns (
-                            guildid, channelid, messageid, pokemon_name
-                        )
-                        VALUES ($1, $2, $3, $4)
-                        ON CONFLICT (messageid) DO NOTHING
-                        """,
-                        message.guild.id,
-                        message.channel.id,
-                        message.id,
-                        name.casefold(),
-                    )
-                )
-                spawn_insert.add_done_callback(
-                    self._log_background_task_exception
-                )
-
             total_ms = (
                 time.perf_counter()
                 - overall_start
@@ -834,17 +789,6 @@ class SpawnPredictor(commands.Cog):
                 get_users_region_ping(name, message.guild.id, db),
             )
 
-            types = self.get_pokemon_types(name)
-            regions = self.get_pokemon_regions(name)
-            type_ping_users, region_ping_users = await limit_quest_ping_users(
-                message.guild.id,
-                grind_support_users,
-                db,
-                type_ping_users,
-                region_ping_users,
-                types,
-                regions,
-            )
             rares = self.get_rare_flags(name)
             regionals = self.get_regional_flags(name)
 
@@ -859,22 +803,6 @@ class SpawnPredictor(commands.Cog):
                     name
                 )
             )
-
-            if (
-                (types or regions)
-                and self.is_type_enabled()
-                and message.guild
-                and message.guild.id in TYPE_CHANNEL_SYNC_GUILD_IDS
-            ):
-                type_sync_task = asyncio.create_task(
-                    self.sync_type_channel_data(
-                        message.channel.id,
-                        types + regions,
-                    )
-                )
-                type_sync_task.add_done_callback(
-                    self._log_background_task_exception
-                )
 
             if is_only_ping_enabled() and not (
                 hunters
@@ -1055,15 +983,6 @@ class SpawnPredictor(commands.Cog):
     async def _send_spawn_reply(self, channel, content: str):
         async with self._spawn_send_semaphore:
             await channel.send(content)
-
-    async def _mute_poketwo_for_spawn(self, guild, channel):
-        try:
-            await set_poketwo_send_permission(guild, channel, False)
-        except (discord.Forbidden, discord.HTTPException) as error:
-            print(
-                f"⚠️ Failed to apply grind support channel control in "
-                f"{guild.id}/{channel.id}: {error}"
-            )
 
     def _guild_role_mention(self, guild, role_name: str):
         if guild is None:
