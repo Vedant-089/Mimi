@@ -2,7 +2,12 @@ import discord
 from discord.ext import commands
 
 from database import db
-from functions import invalidate_server_settings_cache
+from functions import (
+    get_allowed_role_ids,
+    has_server_permission,
+    invalidate_server_settings_cache,
+    set_allowed_role_ids,
+)
 
 
 async def get_server_settings(server_id: int):
@@ -18,6 +23,7 @@ async def get_server_settings(server_id: int):
         """
         SELECT naming, shiny_hunt_prio, ping_shiny, ping_collection,
                ping_reserves, ping_type, ping_region, copy_support,
+               allow_reserves, allow_category, allow_settings,
                main_starboard, shiny_starboard, gmax_starboard
         FROM server_settings
         WHERE serverid = $1
@@ -54,6 +60,13 @@ class ServerSettingsView(discord.ui.LayoutView):
         )
         self.starboard_button.callback = self.starboard
 
+        self.allowed_role_button = discord.ui.Button(
+            label="Open",
+            style=discord.ButtonStyle.primary,
+            custom_id="settings:allowed-role",
+        )
+        self.allowed_role_button.callback = self.allowed_role
+
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
@@ -71,6 +84,10 @@ class ServerSettingsView(discord.ui.LayoutView):
                 discord.ui.Section(
                     "**Starboard**\n-# Configure the server starboard.",
                     accessory=self.starboard_button,
+                ),
+                discord.ui.Section(
+                    "**Allowed role**\n-# Choose allowed roles and what they can manage.",
+                    accessory=self.allowed_role_button,
                 ),
                 accent_color=discord.Color.from_rgb(47, 49, 54),
             )
@@ -93,6 +110,15 @@ class ServerSettingsView(discord.ui.LayoutView):
             )
             return False
         return True
+
+    async def _check_configure(self, interaction: discord.Interaction) -> bool:
+        if await has_server_permission(interaction.user, "allow_settings", db):
+            return True
+        await interaction.response.send_message(
+            "❌ You need administrator permissions or an allowed role with Configure Server Settings enabled.",
+            ephemeral=True,
+        )
+        return False
 
     async def naming(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
@@ -131,6 +157,18 @@ class ServerSettingsView(discord.ui.LayoutView):
                 settings["main_starboard"],
                 settings["shiny_starboard"],
                 settings["gmax_starboard"],
+            )
+        )
+
+    async def allowed_role(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        settings = await get_server_settings(self.server_id)
+        await interaction.response.edit_message(
+            view=AllowedRoleSettingsView(
+                self.author_id,
+                self.server_id,
+                settings,
             )
         )
 
@@ -238,17 +276,17 @@ class NamingSettingsView(discord.ui.LayoutView):
             return False
         return True
 
-    async def _check_admin(self, interaction: discord.Interaction) -> bool:
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "❌ Only server administrators can change settings.",
-                ephemeral=True,
-            )
-            return False
-        return True
+    async def _check_configure(self, interaction: discord.Interaction) -> bool:
+        if await has_server_permission(interaction.user, "allow_settings", db):
+            return True
+        await interaction.response.send_message(
+            "❌ You need administrator permissions or an allowed role with Configure Server Settings enabled.",
+            ephemeral=True,
+        )
+        return False
 
     async def toggle_naming(self, interaction: discord.Interaction):
-        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+        if not await self._check_user(interaction) or not await self._check_configure(interaction):
             return
         self.naming_enabled = not self.naming_enabled
         await db.execute(
@@ -261,7 +299,7 @@ class NamingSettingsView(discord.ui.LayoutView):
         await interaction.response.edit_message(view=self)
 
     async def toggle_shiny_hunt_prio(self, interaction: discord.Interaction):
-        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+        if not await self._check_user(interaction) or not await self._check_configure(interaction):
             return
         self.shiny_hunt_prio = not self.shiny_hunt_prio
         await db.execute(
@@ -274,7 +312,7 @@ class NamingSettingsView(discord.ui.LayoutView):
         await interaction.response.edit_message(view=self)
 
     async def toggle_copy_support(self, interaction: discord.Interaction):
-        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+        if not await self._check_user(interaction) or not await self._check_configure(interaction):
             return
         self.copy_support = not self.copy_support
         await db.execute(
@@ -376,17 +414,17 @@ class RolePingsSettingsView(discord.ui.LayoutView):
             return False
         return True
 
-    async def _check_admin(self, interaction: discord.Interaction) -> bool:
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "❌ Only server administrators can change settings.",
-                ephemeral=True,
-            )
-            return False
-        return True
+    async def _check_configure(self, interaction: discord.Interaction) -> bool:
+        if await has_server_permission(interaction.user, "allow_settings", db):
+            return True
+        await interaction.response.send_message(
+            "❌ You need administrator permissions or an allowed role with Configure Server Settings enabled.",
+            ephemeral=True,
+        )
+        return False
 
     async def toggle_ping(self, interaction: discord.Interaction, field: str):
-        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+        if not await self._check_user(interaction) or not await self._check_configure(interaction):
             return
         self.ping_flags[field] = not self.ping_flags[field]
         await db.execute(
@@ -502,17 +540,17 @@ class StarboardSettingsView(discord.ui.LayoutView):
             return False
         return True
 
-    async def _check_admin(self, interaction: discord.Interaction) -> bool:
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                "❌ Only server administrators can change settings.",
-                ephemeral=True,
-            )
-            return False
-        return True
+    async def _check_configure(self, interaction: discord.Interaction) -> bool:
+        if await has_server_permission(interaction.user, "allow_settings", db):
+            return True
+        await interaction.response.send_message(
+            "❌ You need administrator permissions or an allowed role with Configure Server Settings enabled.",
+            ephemeral=True,
+        )
+        return False
 
     async def _confirm_channel(self, interaction: discord.Interaction, board_name: str, selector):
-        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+        if not await self._check_user(interaction) or not await self._check_configure(interaction):
             return
         channel = selector.values[0] if selector.values else None
 
@@ -551,6 +589,147 @@ class StarboardSettingsView(discord.ui.LayoutView):
                 self.server_id,
                 settings["naming"],
                 settings["shiny_hunt_prio"],
+            )
+        )
+
+
+ALLOWED_PERM_FIELDS = (
+    ("allow_reserves", "Reserve Commands", "Let allowed roles use reserve commands."),
+    ("allow_category", "Category Edit/Create", "Let allowed roles create and edit categories."),
+    ("allow_settings", "Configure Server Settings of Mimi", "Let allowed roles change Mimi server settings."),
+)
+
+
+class AllowedRoleSettingsView(discord.ui.LayoutView):
+    def __init__(self, author_id: int, server_id: int, settings):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.server_id = server_id
+        self.naming_enabled = bool(settings["naming"])
+        self.shiny_hunt_prio = bool(settings["shiny_hunt_prio"])
+        self.perm_flags = {
+            field: True if settings[field] is None else bool(settings[field])
+            for field, _, _ in ALLOWED_PERM_FIELDS
+        }
+        self.allowed_role_ids = get_allowed_role_ids(server_id)
+        self._build_layout()
+
+    def _toggle_button(self, field: str):
+        enabled = self.perm_flags[field]
+        button = discord.ui.Button(
+            label="On" if enabled else "Off",
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.danger,
+            custom_id=f"settings:allowed-role:{field}",
+        )
+
+        async def callback(interaction: discord.Interaction, perm_field=field):
+            await self.toggle_perm(interaction, perm_field)
+
+        button.callback = callback
+        return button
+
+    def _build_layout(self):
+        self.clear_items()
+        if self.allowed_role_ids:
+            roles_text = ", ".join(f"<@&{role_id}>" for role_id in self.allowed_role_ids)
+        else:
+            roles_text = "None yet. Select roles below or use `m!allow`."
+
+        role_select_kwargs = {
+            "placeholder": "Select allowed roles",
+            "min_values": 0,
+            "max_values": 25,
+            "custom_id": "settings:allowed-role:select",
+            "required": False,
+        }
+        if self.allowed_role_ids:
+            role_select_kwargs["default_values"] = [
+                discord.Object(id=role_id) for role_id in self.allowed_role_ids[:25]
+            ]
+        self.role_select = discord.ui.RoleSelect(**role_select_kwargs)
+        self.role_select.callback = self.select_roles
+
+        sections = []
+        for field, title, hint in ALLOWED_PERM_FIELDS:
+            status = "✅ **Enabled**" if self.perm_flags[field] else "❌ **Disabled**"
+            sections.append(
+                discord.ui.Section(
+                    f"**{title}**\n{status}\n-# {hint}",
+                    accessory=self._toggle_button(field),
+                )
+            )
+
+        back_button = discord.ui.Button(
+            label="Back",
+            style=discord.ButtonStyle.primary,
+            custom_id="settings:allowed-role:back",
+        )
+        back_button.callback = self.back
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# Allowed role\nConfigure which roles are allowed and what they can do."
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"**Allowed roles**\n{roles_text}"),
+                discord.ui.ActionRow(self.role_select),
+                discord.ui.Separator(),
+                *sections,
+                discord.ui.Separator(),
+                discord.ui.ActionRow(back_button),
+                accent_color=discord.Color.from_rgb(47, 49, 54),
+            )
+        )
+
+    async def _check_user(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ Only the person who opened these settings can use the buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _check_admin(self, interaction: discord.Interaction) -> bool:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server administrators can change allowed role permissions.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def select_roles(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+            return
+        self.allowed_role_ids = [role.id for role in self.role_select.values]
+        set_allowed_role_ids(self.server_id, self.allowed_role_ids)
+        self._build_layout()
+        await interaction.response.edit_message(view=self)
+
+    async def toggle_perm(self, interaction: discord.Interaction, field: str):
+        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+            return
+        self.perm_flags[field] = not self.perm_flags[field]
+        await db.execute(
+            f"UPDATE server_settings SET {field} = $1 WHERE serverid = $2",
+            self.perm_flags[field],
+            self.server_id,
+        )
+        invalidate_server_settings_cache(self.server_id)
+        self._build_layout()
+        await interaction.response.edit_message(view=self)
+
+    async def back(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        await interaction.response.edit_message(
+            view=ServerSettingsView(
+                self.author_id,
+                self.server_id,
+                self.naming_enabled,
+                self.shiny_hunt_prio,
             )
         )
 

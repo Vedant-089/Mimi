@@ -27,7 +27,7 @@ HELP_PAGES_DATA = [
             "• `m!r search <pokemon>` (`m!r s`) - Searches for users who have reserved specific Pokémon.\n"
             "• `m!r list` (`m!r l`) - Lists all active Pokémon reserves in the server.\n"
             "• `m!r @user` - Displays all reserved Pokémon for a specific user.\n"
-            "• `m!allow <roleid1>, <roleid2>` - Admin-only; allows roles to use restricted reserve commands."
+            "• `m!allow <roleid1>, <roleid2>` - Admin-only; adds roles to the allowed roles list used in `m!settings`."
             "\n• `m!suspend <userid>` - Suspends a user and removes their Mimi data (Admins/allowed roles).\n"
             "• `m!unsuspend <userid>` - Removes a user's suspension (Admins/allowed roles)."
         ),
@@ -42,6 +42,14 @@ HELP_PAGES_DATA = [
             "• `m!cl list` - Displays all Pokémon in your server collection.\n"
             "• `m!gcl add/remove <pokemon>` - Adds or removes exact Pokémon names in every server collection.\n"
             "• `m!gcl clear` - Clears your collection in every server."
+        ),
+    },
+    {
+        "title": "📁 Category Commands",
+        "description": (
+            "• `m!category` - Shows this server's categories with an Edit button on each name.\n"
+            "• `m!category create <name> pokemon1, pokemon2` - Creates a server-only category (Admins, or allowed roles if Category Edit/Create is on). Invalid names are skipped and listed as not added.\n"
+            "• `m!category edit <name> pokemon1, pokemon2` - Replaces that category's Pokémon list (Admins, or allowed roles if Category Edit/Create is on). Invalid names are skipped and listed as not added."
         ),
     },
     {
@@ -68,7 +76,7 @@ HELP_PAGES_DATA = [
             "• `m!rank <rare/regional/incense>` - Toggles ping roles (`Rares`, `Regionals`, `Incense`).\n"
             "• `m!incenses` - Displays active tracked incense channels in the server.\n"
             "• `m!roles` - Creates standard type, region, and perk roles (Admin Only).\n"
-            "• `m!settings` - Opens the server settings panel. Admins can toggle naming, spawn pings, and starboard channels."
+            "• `m!settings` - Opens the server settings panel. Admins can toggle naming, spawn pings, starboard channels, and Allowed role permissions."
         ),
     },
 ]
@@ -80,9 +88,10 @@ class HelpSelect(discord.ui.Select):
             discord.SelectOption(label="Shiny Hunt", description="Shiny hunt commands", value="0", emoji="✨"),
             discord.SelectOption(label="Reserves", description="Server reserve commands", value="1", emoji="🔒"),
             discord.SelectOption(label="Collection", description="Collection ping commands", value="2", emoji="📦"),
-            discord.SelectOption(label="Type & Region Pings", description="Type and region ping embeds", value="3", emoji="🎯"),
-            discord.SelectOption(label="Premium & Support", description="Perk and support commands", value="4", emoji="👑"),
-            discord.SelectOption(label="Utility & AFK", description="AFK, ranks, and utility commands", value="5", emoji="⚙️"),
+            discord.SelectOption(label="Categories", description="Server category lists", value="3", emoji="📁"),
+            discord.SelectOption(label="Type & Region Pings", description="Type and region ping embeds", value="4", emoji="🎯"),
+            discord.SelectOption(label="Premium & Support", description="Perk and support commands", value="5", emoji="👑"),
+            discord.SelectOption(label="Utility & AFK", description="AFK, ranks, and utility commands", value="6", emoji="⚙️"),
         ]
         super().__init__(
             placeholder="Select a command category...",

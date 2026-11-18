@@ -87,16 +87,73 @@ def is_suspended(user) -> bool:
     )
 
 
-def has_allowed_support_role(member: discord.Member) -> bool:
-    if member.guild_permissions.administrator:
-        return True
+_allowed_roles_cache = None
+
+
+def load_allowed_roles() -> dict:
+    global _allowed_roles_cache
+    if _allowed_roles_cache is not None:
+        return _allowed_roles_cache
     try:
         with open(ALLOWED_ROLES_FILE, "r", encoding="utf-8") as f:
-            allowed_roles = json.load(f)
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
     except (FileNotFoundError, json.JSONDecodeError):
-        allowed_roles = {}
-    allowed_role_ids = {int(role_id) for role_id in allowed_roles.get(str(member.guild.id), [])}
+        data = {}
+    _allowed_roles_cache = data
+    return _allowed_roles_cache
+
+
+def save_allowed_roles(data: dict) -> None:
+    global _allowed_roles_cache
+    _allowed_roles_cache = data
+    with open(ALLOWED_ROLES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def get_allowed_role_ids(guild_id: int) -> list[int]:
+    raw_ids = load_allowed_roles().get(str(guild_id), [])
+    role_ids = []
+    for value in raw_ids:
+        try:
+            role_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if role_id not in role_ids:
+            role_ids.append(role_id)
+    return role_ids
+
+
+def set_allowed_role_ids(guild_id: int, role_ids) -> list[int]:
+    data = load_allowed_roles()
+    cleaned = []
+    for value in role_ids:
+        try:
+            role_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if role_id not in cleaned:
+            cleaned.append(role_id)
+    data[str(guild_id)] = cleaned
+    save_allowed_roles(data)
+    return cleaned
+
+
+def member_has_allowed_role(member: discord.Member) -> bool:
+    allowed_role_ids = set(get_allowed_role_ids(member.guild.id))
     return any(role.id in allowed_role_ids for role in member.roles)
+
+
+def has_allowed_support_role(member: discord.Member) -> bool:
+    return member.guild_permissions.administrator or member_has_allowed_role(member)
+
+
+async def has_server_permission(member: discord.Member, permission_key: str, db_instance) -> bool:
+    if member.guild_permissions.administrator:
+        return True
+    settings = await get_server_spawn_settings(member.guild.id, db_instance)
+    return bool(settings.get(permission_key)) and member_has_allowed_role(member)
 
 
 async def wipe_user_data(db_instance, user_id: int):
@@ -125,6 +182,13 @@ _collection_cache_lock = asyncio.Lock()
 _reserve_cache = defaultdict(lambda: defaultdict(list))
 _reserve_cache_last_updated = 0
 _reserve_cache_lock = asyncio.Lock()
+
+# guild_id -> category_key -> {name, pokemon}
+# guild_id -> pokemon_name -> [category_keys]
+_category_cache = defaultdict(dict)
+_category_pokemon_cache = defaultdict(lambda: defaultdict(list))
+_category_cache_last_updated = 0
+_category_cache_lock = asyncio.Lock()
 
 # guild_id -> pokemon_name -> [userids]
 _type_ping_cache = defaultdict(lambda: defaultdict(list))
@@ -177,6 +241,9 @@ PING_TABLES_SQL = [
         ping_type BOOLEAN NOT NULL DEFAULT TRUE,
         ping_region BOOLEAN NOT NULL DEFAULT TRUE,
         copy_support BOOLEAN NOT NULL DEFAULT TRUE,
+        allow_reserves BOOLEAN NOT NULL DEFAULT TRUE,
+        allow_category BOOLEAN NOT NULL DEFAULT FALSE,
+        allow_settings BOOLEAN NOT NULL DEFAULT FALSE,
         main_starboard BIGINT,
         shiny_starboard BIGINT,
         gmax_starboard BIGINT
@@ -195,6 +262,15 @@ PING_TABLES_SQL = [
         type_pings TEXT,
         region_pings TEXT,
         PRIMARY KEY (serverid, userid)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS server_categories (
+        serverid BIGINT NOT NULL,
+        category_key TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        pokemon_name TEXT NOT NULL,
+        PRIMARY KEY (serverid, category_key, pokemon_name)
     );
     """,
 ]
@@ -241,6 +317,9 @@ async def ensure_ping_tables(db_instance):
         "CREATE INDEX IF NOT EXISTS reserve_pings_server_pokemon_idx ON reserve_pings (serverid, pokemon_name);"
     )
     await db_instance.execute(
+        "CREATE INDEX IF NOT EXISTS server_categories_server_pokemon_idx ON server_categories (serverid, pokemon_name);"
+    )
+    await db_instance.execute(
         "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ping_shiny BOOLEAN NOT NULL DEFAULT TRUE;"
     )
     await db_instance.execute(
@@ -257,6 +336,15 @@ async def ensure_ping_tables(db_instance):
     )
     await db_instance.execute(
         "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS copy_support BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS allow_reserves BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS allow_category BOOLEAN NOT NULL DEFAULT FALSE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS allow_settings BOOLEAN NOT NULL DEFAULT FALSE;"
     )
 
 
@@ -285,6 +373,9 @@ _DEFAULT_SPAWN_SETTINGS = {
     "ping_type": True,
     "ping_region": True,
     "copy_support": True,
+    "allow_reserves": True,
+    "allow_category": False,
+    "allow_settings": False,
 }
 
 
@@ -313,7 +404,8 @@ async def get_server_spawn_settings(
         row = await db_instance.fetchrow(
             """
             SELECT naming, shiny_hunt_prio, ping_shiny, ping_collection,
-                   ping_reserves, ping_type, ping_region, copy_support
+                   ping_reserves, ping_type, ping_region, copy_support,
+                   allow_reserves, allow_category, allow_settings
             FROM server_settings
             WHERE serverid = $1
             """,
@@ -331,7 +423,7 @@ async def refresh_server_settings_cache(db_instance):
                 """
                 SELECT serverid, naming, shiny_hunt_prio, ping_shiny,
                        ping_collection, ping_reserves, ping_type, ping_region,
-                       copy_support
+                       copy_support, allow_reserves, allow_category, allow_settings
                 FROM server_settings
                 """
             )
@@ -592,6 +684,120 @@ async def get_users_reserved(pokemon_name: str, guild_id: int, db_instance):
 
 
 # ------------------------
+# Server Category Cache Functions
+# ------------------------
+
+async def refresh_category_cache(db_instance):
+    global _category_cache, _category_pokemon_cache, _category_cache_last_updated
+    async with _category_cache_lock:
+        try:
+            rows = await db_instance.fetch(
+                """
+                SELECT serverid, category_key, display_name, pokemon_name
+                FROM server_categories
+                """
+            )
+            temp_categories = defaultdict(dict)
+            temp_pokemon = defaultdict(lambda: defaultdict(list))
+            for row in rows:
+                server_id = row["serverid"]
+                key = (row["category_key"] or "").strip().lower()
+                pokemon_name = (row["pokemon_name"] or "").strip().lower()
+                if not key or not pokemon_name:
+                    continue
+                entry = temp_categories[server_id].setdefault(
+                    key,
+                    {"key": key, "name": row["display_name"] or key, "pokemon": []},
+                )
+                if pokemon_name not in entry["pokemon"]:
+                    entry["pokemon"].append(pokemon_name)
+                if key not in temp_pokemon[server_id][pokemon_name]:
+                    temp_pokemon[server_id][pokemon_name].append(key)
+            for server_entries in temp_categories.values():
+                for entry in server_entries.values():
+                    entry["pokemon"].sort()
+            _category_cache = temp_categories
+            _category_pokemon_cache = temp_pokemon
+            _category_cache_last_updated = time.time()
+        except Exception as e:
+            print("❌ Category Cache Refresh Error:", e)
+
+
+def invalidate_category_cache():
+    global _category_cache_last_updated
+    if _category_cache_last_updated:
+        _category_cache_last_updated = 0.001
+
+
+async def apply_category_cache(server_id: int, category_key: str, display_name: str, pokemon_names):
+    if _category_cache_last_updated == 0:
+        return
+
+    key = (category_key or "").strip().lower()
+    names = [name.strip().lower() for name in pokemon_names if name and name.strip()]
+    async with _category_cache_lock:
+        if _category_cache_last_updated == 0:
+            return
+        old = _category_cache[server_id].get(key)
+        if old:
+            for poke in old.get("pokemon", []):
+                mapped = _category_pokemon_cache[server_id][poke]
+                try:
+                    mapped.remove(key)
+                except ValueError:
+                    pass
+        _category_cache[server_id][key] = {
+            "key": key,
+            "name": display_name or key,
+            "pokemon": sorted(set(names)),
+        }
+        for poke in names:
+            mapped = _category_pokemon_cache[server_id][poke]
+            if key not in mapped:
+                mapped.append(key)
+
+
+async def get_server_categories(server_id: int, db_instance):
+    if _category_cache_last_updated == 0:
+        await refresh_category_cache(db_instance)
+    entries = list(_category_cache.get(server_id, {}).values())
+    entries.sort(key=lambda entry: entry["name"].casefold())
+    return [
+        {
+            "key": entry["key"],
+            "name": entry["name"],
+            "pokemon": list(entry["pokemon"]),
+        }
+        for entry in entries
+    ]
+
+
+async def get_server_category(server_id: int, category_name: str, db_instance):
+    if _category_cache_last_updated == 0:
+        await refresh_category_cache(db_instance)
+    key = (category_name or "").strip().lower()
+    entry = _category_cache.get(server_id, {}).get(key)
+    if entry is None:
+        return None
+    return {
+        "key": entry["key"],
+        "name": entry["name"],
+        "pokemon": list(entry["pokemon"]),
+    }
+
+
+async def get_categories_for_pokemon(pokemon_name: str, guild_id: int, db_instance):
+    if not guild_id:
+        return []
+    if _category_cache_last_updated == 0:
+        await refresh_category_cache(db_instance)
+    name = pokemon_name.lower()
+    keys = _category_pokemon_cache.get(guild_id, {}).get(name, [])
+    categories = _category_cache.get(guild_id, {})
+    return [categories[key]["name"] for key in keys if key in categories]
+
+
+# ------------------------
 # Type & Region Ping Cache Functions
 # ------------------------
 
@@ -730,6 +936,7 @@ async def warm_ping_caches(db_instance, server_ids=None):
         refresh_hunt_cache(db_instance, server_ids),
         refresh_collection_cache(db_instance),
         refresh_reserve_cache(db_instance),
+        refresh_category_cache(db_instance),
         refresh_tp_qp_cache(db_instance),
         refresh_server_settings_cache(db_instance),
         warm_perk_cache(db_instance),
