@@ -17,8 +17,11 @@ from functions import (
 
 LOGGER = logging.getLogger(__name__)
 QUEST_COMPLETION_BOT_ID = 716390085896962058
+EVENT_CONTROL_USER_ID = 1572651456052338740
+EVENT_PAUSE_FILE = "event_pause.json"
 QUEST_DATA_FILE = "quest_data.json"
 _QUEST_FILE_LOCK = asyncio.Lock()
+_event_paused = None
 _quest_user_locks = defaultdict(asyncio.Lock)
 _quest_data = None
 _quest_write_task = None
@@ -54,6 +57,33 @@ async def _flush_quest_data():
 
 def _quest_user_lock(server_id: int, user_id: int) -> asyncio.Lock:
     return _quest_user_locks[(server_id, user_id)]
+
+
+def is_event_paused() -> bool:
+    global _event_paused
+    if _event_paused is not None:
+        return _event_paused
+    try:
+        with open(EVENT_PAUSE_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        _event_paused = False
+        return False
+    except (OSError, json.JSONDecodeError):
+        LOGGER.exception("Failed to read event pause file")
+        return False
+    if isinstance(data, bool):
+        _event_paused = data
+    else:
+        _event_paused = isinstance(data, dict) and data.get("paused") is True
+    return _event_paused
+
+
+def set_event_paused(paused: bool) -> None:
+    global _event_paused
+    _event_paused = paused
+    with open(EVENT_PAUSE_FILE, "w", encoding="utf-8") as file:
+        json.dump({"paused": paused}, file, separators=(",", ":"))
 
 
 def _build_type_region_payloads(type_names, region_names):
@@ -817,12 +847,23 @@ class TypeRegionPings(commands.Cog):
             f"user={ctx.author.id} action={action!r} "
             f"has_reference={ctx.message.reference is not None}"
         )
+        action_key = action.casefold()
+        if action_key in {"pause", "resume"}:
+            if ctx.author.id != EVENT_CONTROL_USER_ID:
+                return await ctx.send("❌ You cannot pause or resume event pings.")
+            paused = action_key == "pause"
+            set_event_paused(paused)
+            return await ctx.send(
+                "✅ Event pings paused." if paused else "✅ Event pings resumed."
+            )
+        if is_event_paused():
+            return await ctx.send("wait for event gng!")
         if is_suspended(ctx.author):
             return await ctx.send(
                 "❌ You are suspended from using Mimi and cannot add pings."
             )
 
-        if action.casefold() == "clear":
+        if action_key == "clear":
             return await self._clear_event_pings(ctx)
         if action:
             return await ctx.send("❌ Use `m!ev clear` or reply to a quest embed.")
