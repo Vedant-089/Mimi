@@ -64,7 +64,7 @@ HELP_PAGES_DATA = [
     {
         "title": "⚙️ Utility & AFK Commands",
         "description": (
-            "• `m!afk` - Opens the interactive AFK menu to toggle global Shiny Hunt and Collection AFK.\n"
+            "• `m!afk` - Opens the interactive AFK menu to toggle global Shiny Hunt and Collection AFK. Use Starboard AFK to control whether your name appears on starboard catch messages.\n"
             "• `m!rank <rare/regional/incense>` - Toggles ping roles (`Rares`, `Regionals`, `Incense`).\n"
             "• `m!incenses` - Displays active tracked incense channels in the server.\n"
             "• `m!roles` - Creates standard type, region, and perk roles (Admin Only).\n"
