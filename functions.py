@@ -171,6 +171,11 @@ PING_TABLES_SQL = [
         serverid BIGINT PRIMARY KEY,
         naming BOOLEAN NOT NULL DEFAULT TRUE,
         shiny_hunt_prio BOOLEAN NOT NULL DEFAULT FALSE,
+        ping_shiny BOOLEAN NOT NULL DEFAULT TRUE,
+        ping_collection BOOLEAN NOT NULL DEFAULT TRUE,
+        ping_reserves BOOLEAN NOT NULL DEFAULT TRUE,
+        ping_type BOOLEAN NOT NULL DEFAULT TRUE,
+        ping_region BOOLEAN NOT NULL DEFAULT TRUE,
         main_starboard BIGINT,
         shiny_starboard BIGINT,
         gmax_starboard BIGINT
@@ -234,6 +239,21 @@ async def ensure_ping_tables(db_instance):
     await db_instance.execute(
         "CREATE INDEX IF NOT EXISTS reserve_pings_server_pokemon_idx ON reserve_pings (serverid, pokemon_name);"
     )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ping_shiny BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ping_collection BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ping_reserves BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ping_type BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
+    await db_instance.execute(
+        "ALTER TABLE server_settings ADD COLUMN IF NOT EXISTS ping_region BOOLEAN NOT NULL DEFAULT TRUE;"
+    )
 
 
 async def get_server_naming_enabled(server_id: int, db_instance) -> bool:
@@ -252,49 +272,67 @@ async def get_server_shiny_hunt_priority(server_id: int, db_instance) -> bool:
     return bool(value) if value is not None else False
 
 
+_DEFAULT_SPAWN_SETTINGS = {
+    "naming": True,
+    "shiny_hunt_prio": False,
+    "ping_shiny": True,
+    "ping_collection": True,
+    "ping_reserves": True,
+    "ping_type": True,
+    "ping_region": True,
+}
+
+
+def _spawn_settings_from_row(row) -> dict:
+    if row is None:
+        return dict(_DEFAULT_SPAWN_SETTINGS)
+    return {
+        key: True if row[key] is None else bool(row[key])
+        for key in _DEFAULT_SPAWN_SETTINGS
+    }
+
+
 async def get_server_spawn_settings(
     server_id: int,
     db_instance,
-) -> tuple[bool, bool]:
+) -> dict:
     cached = _server_settings_cache.get(server_id)
     if cached is not None:
-        return cached
+        return dict(cached)
 
     async with _server_settings_cache_lock:
         cached = _server_settings_cache.get(server_id)
         if cached is not None:
-            return cached
+            return dict(cached)
 
         row = await db_instance.fetchrow(
             """
-            SELECT naming, shiny_hunt_prio
+            SELECT naming, shiny_hunt_prio, ping_shiny, ping_collection,
+                   ping_reserves, ping_type, ping_region
             FROM server_settings
             WHERE serverid = $1
             """,
             server_id,
         )
-        settings = (
-            (True, False)
-            if row is None
-            else (bool(row["naming"]), bool(row["shiny_hunt_prio"]))
-        )
+        settings = _spawn_settings_from_row(row)
         _server_settings_cache[server_id] = settings
-        return settings
+        return dict(settings)
 
 
 async def refresh_server_settings_cache(db_instance):
     async with _server_settings_cache_lock:
         try:
             rows = await db_instance.fetch(
-                "SELECT serverid, naming, shiny_hunt_prio FROM server_settings"
+                """
+                SELECT serverid, naming, shiny_hunt_prio, ping_shiny,
+                       ping_collection, ping_reserves, ping_type, ping_region
+                FROM server_settings
+                """
             )
             _server_settings_cache.clear()
             _server_settings_cache.update(
                 {
-                    row["serverid"]: (
-                        bool(row["naming"]),
-                        bool(row["shiny_hunt_prio"]),
-                    )
+                    row["serverid"]: _spawn_settings_from_row(row)
                     for row in rows
                 }
             )
@@ -721,19 +759,6 @@ def _load_perks_config():
         except Exception:
             _perks_config = {}
     return _perks_config
-
-
-def is_type_enabled() -> bool:
-    try:
-        with open("type_settings.json", "r", encoding="utf-8") as f:
-            data = json.load(f)
-        value = data.get("type", data.get("enabled", True))
-        return bool(value)
-    except FileNotFoundError:
-        return True
-    except Exception as e:
-        print(f"⚠️ Failed to read type_settings.json: {e}")
-        return True
 
 
 def invalidate_perk_cache(server_id: int | None = None):

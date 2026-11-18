@@ -43,7 +43,6 @@ MODEL_PATH = "pokemon_halloween_int8.onnx"
 IMG_SIZE = 224
 CONF_THRESHOLD = 0.30  # 30%
 RECOG_PATH = Path("recog.json")
-TYPE_SETTINGS_PATH = Path("type_settings.json")
 TYPE_CHANNELS_PATH = Path("type_channels.json")
 if not os.path.exists(MODEL_PATH):
     print(f"Downloading {MODEL_PATH}...")
@@ -218,7 +217,6 @@ class SpawnPredictor(commands.Cog):
             for pokemon_name in names:
                 self.name_to_regions[pokemon_name.lower()].append(region_name)
 
-        self._type_enabled = self._read_type_enabled()
         self._recognition_enabled = self._read_recognition_enabled()
         self._role_id_cache = {}
         self._type_channel_data = None
@@ -486,57 +484,6 @@ class SpawnPredictor(commands.Cog):
     def is_recognition_enabled(self) -> bool:
         return self._recognition_enabled
 
-    def _read_type_enabled(self) -> bool:
-        try:
-            with TYPE_SETTINGS_PATH.open(
-                "r",
-                encoding="utf-8"
-            ) as f:
-                data = json.load(f)
-
-            value = data.get(
-                "type",
-                data.get(
-                    "enabled",
-                    True
-                )
-            )
-
-            return bool(value)
-
-        except FileNotFoundError:
-            return True
-
-        except Exception as e:
-            print(
-                f"⚠️ Failed to read {TYPE_SETTINGS_PATH}: {e}"
-            )
-
-            return True
-
-    def is_type_enabled(self) -> bool:
-        return self._type_enabled
-
-    async def set_type_enabled(
-        self,
-        enabled: bool
-    ):
-        self._type_enabled = enabled
-
-        def _write():
-            with TYPE_SETTINGS_PATH.open(
-                "w",
-                encoding="utf-8"
-            ) as f:
-                json.dump(
-                    {"type": enabled},
-                    f,
-                    indent=2,
-                    sort_keys=True
-                )
-
-        await asyncio.to_thread(_write)
-
     async def _download_image_bytes(
         self,
         image_url: str
@@ -666,10 +613,12 @@ class SpawnPredictor(commands.Cog):
         if message.guild is None:
             return
 
-        naming_enabled, shiny_hunt_prio = await get_server_spawn_settings(
+        spawn_settings = await get_server_spawn_settings(
             message.guild.id,
             db,
         )
+        naming_enabled = spawn_settings["naming"]
+        shiny_hunt_prio = spawn_settings["shiny_hunt_prio"]
         if not naming_enabled:
             return
 
@@ -803,6 +752,17 @@ class SpawnPredictor(commands.Cog):
                     name
                 )
             )
+
+            if not spawn_settings["ping_shiny"]:
+                hunters = []
+            if not spawn_settings["ping_collection"]:
+                collectors = []
+            if not spawn_settings["ping_reserves"]:
+                reserves = []
+            if not spawn_settings["ping_type"]:
+                type_ping_users = []
+            if not spawn_settings["ping_region"]:
+                region_ping_users = []
 
             if is_only_ping_enabled() and not (
                 hunters
@@ -1048,13 +1008,6 @@ class SpawnPredictor(commands.Cog):
             await ctx.send(f"🏓 Pong! `{latency_ms:.0f}ms`")
             return
 
-        if not self.is_type_enabled():
-            await ctx.send(
-                "❌ Type/region prediction info is currently disabled. "
-                "Use `m!type` to turn it back on."
-            )
-            return
-
         if (
             type_name not in self.typing_data
             and type_name not in self.region_data
@@ -1102,29 +1055,6 @@ class SpawnPredictor(commands.Cog):
         await ctx.send(
             f"✅ Pinged {ctx.author.mention} "
             f"in {sent_count} channel(s) for {type_name}."
-        )
-
-    @commands.command(name="type")
-    @commands.guild_only()
-    async def toggle_type_info(
-        self,
-        ctx: commands.Context
-    ):
-
-        new_value = not self.is_type_enabled()
-
-        await self.set_type_enabled(
-            new_value
-        )
-
-        state = (
-            "enabled"
-            if new_value
-            else "disabled"
-        )
-
-        await ctx.send(
-            f"✅ Type/region prediction info is now **{state}**."
         )
 
     @commands.command(name="predict")

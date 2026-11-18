@@ -68,7 +68,7 @@ HELP_PAGES_DATA = [
             "• `m!rank <rare/regional/incense>` - Toggles ping roles (`Rares`, `Regionals`, `Incense`).\n"
             "• `m!incenses` - Displays active tracked incense channels in the server.\n"
             "• `m!roles` - Creates standard type, region, and perk roles (Admin Only).\n"
-            "• `m!settings` - Opens the server settings panel."
+            "• `m!settings` - Opens the server settings panel. Admins can toggle naming, spawn pings, and starboard channels."
         ),
     },
 ]

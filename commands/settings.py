@@ -16,7 +16,9 @@ async def get_server_settings(server_id: int):
     )
     return await db.fetchrow(
         """
-        SELECT naming, shiny_hunt_prio, main_starboard, shiny_starboard, gmax_starboard
+        SELECT naming, shiny_hunt_prio, ping_shiny, ping_collection,
+               ping_reserves, ping_type, ping_region,
+               main_starboard, shiny_starboard, gmax_starboard
         FROM server_settings
         WHERE serverid = $1
         """,
@@ -38,6 +40,13 @@ class ServerSettingsView(discord.ui.LayoutView):
         )
         self.naming_button.callback = self.naming
 
+        self.pings_button = discord.ui.Button(
+            label="Open",
+            style=discord.ButtonStyle.primary,
+            custom_id="settings:pings",
+        )
+        self.pings_button.callback = self.role_and_pings
+
         self.starboard_button = discord.ui.Button(
             label="Open",
             style=discord.ButtonStyle.primary,
@@ -54,6 +63,10 @@ class ServerSettingsView(discord.ui.LayoutView):
                 discord.ui.Section(
                     "**Naming**\n-# Configure server naming preferences.",
                     accessory=self.naming_button,
+                ),
+                discord.ui.Section(
+                    "**Role and Pings**\n-# Turn spawn pings on or off for this server.",
+                    accessory=self.pings_button,
                 ),
                 discord.ui.Section(
                     "**Starboard**\n-# Configure the server starboard.",
@@ -90,6 +103,18 @@ class ServerSettingsView(discord.ui.LayoutView):
                 self.server_id,
                 self.naming_enabled,
                 self.shiny_hunt_prio,
+            )
+        )
+
+    async def role_and_pings(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        settings = await get_server_settings(self.server_id)
+        await interaction.response.edit_message(
+            view=RolePingsSettingsView(
+                self.author_id,
+                self.server_id,
+                settings,
             )
         )
 
@@ -220,6 +245,118 @@ class NamingSettingsView(discord.ui.LayoutView):
         await db.execute(
             "UPDATE server_settings SET shiny_hunt_prio = $1 WHERE serverid = $2",
             self.shiny_hunt_prio,
+            self.server_id,
+        )
+        invalidate_server_settings_cache(self.server_id)
+        self._build_layout()
+        await interaction.response.edit_message(view=self)
+
+    async def back(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        await interaction.response.edit_message(
+            view=ServerSettingsView(
+                self.author_id,
+                self.server_id,
+                self.naming_enabled,
+                self.shiny_hunt_prio,
+            )
+        )
+
+
+PING_TOGGLE_FIELDS = (
+    ("ping_shiny", "Shiny Hunt Pings", "Ping users hunting this spawn."),
+    ("ping_collection", "Collection Pings", "Ping users collecting this spawn."),
+    ("ping_reserves", "Reserve Pings", "Ping users who reserved this spawn."),
+    ("ping_type", "Type Pings", "Ping users with a matching type quest ping."),
+    ("ping_region", "Region Pings", "Ping users with a matching region quest ping."),
+)
+
+
+class RolePingsSettingsView(discord.ui.LayoutView):
+    def __init__(self, author_id: int, server_id: int, settings):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.server_id = server_id
+        self.naming_enabled = bool(settings["naming"])
+        self.shiny_hunt_prio = bool(settings["shiny_hunt_prio"])
+        self.ping_flags = {
+            field: True if settings[field] is None else bool(settings[field])
+            for field, _, _ in PING_TOGGLE_FIELDS
+        }
+        self._build_layout()
+
+    def _toggle_button(self, field: str):
+        enabled = self.ping_flags[field]
+        button = discord.ui.Button(
+            label="On" if enabled else "Off",
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.danger,
+            custom_id=f"settings:pings:{field}",
+        )
+
+        async def callback(interaction: discord.Interaction, ping_field=field):
+            await self.toggle_ping(interaction, ping_field)
+
+        button.callback = callback
+        return button
+
+    def _build_layout(self):
+        self.clear_items()
+        sections = []
+        for field, title, hint in PING_TOGGLE_FIELDS:
+            status = "✅ **Enabled**" if self.ping_flags[field] else "❌ **Disabled**"
+            sections.append(
+                discord.ui.Section(
+                    f"**{title}**\n{status}\n-# {hint}",
+                    accessory=self._toggle_button(field),
+                )
+            )
+
+        back_button = discord.ui.Button(
+            label="Back",
+            style=discord.ButtonStyle.primary,
+            custom_id="settings:pings:back",
+        )
+        back_button.callback = self.back
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "# Role and Pings\nChoose which spawn pings Mimi can send in this server."
+                ),
+                discord.ui.Separator(),
+                *sections,
+                discord.ui.Separator(),
+                discord.ui.ActionRow(back_button),
+                accent_color=discord.Color.from_rgb(47, 49, 54),
+            )
+        )
+
+    async def _check_user(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ Only the person who opened these settings can use the buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _check_admin(self, interaction: discord.Interaction) -> bool:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server administrators can change settings.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def toggle_ping(self, interaction: discord.Interaction, field: str):
+        if not await self._check_user(interaction) or not await self._check_admin(interaction):
+            return
+        self.ping_flags[field] = not self.ping_flags[field]
+        await db.execute(
+            f"UPDATE server_settings SET {field} = $1 WHERE serverid = $2",
+            self.ping_flags[field],
             self.server_id,
         )
         invalidate_server_settings_cache(self.server_id)
