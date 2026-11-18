@@ -15,3 +15,5 @@ rate_limit.txt
 quest_data.json
 starboard.json
 event_pause.json
+incense_tracking.json
+*.tmp
