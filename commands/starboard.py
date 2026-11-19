@@ -201,25 +201,6 @@ class Starboard(commands.Cog):
         else:
             return
 
-        settings = await db.fetchrow(
-            f"""
-            SELECT main_starboard, {specialty_column or 'NULL'} AS specialty_starboard
-            FROM server_settings
-            WHERE serverid = $1
-            """,
-            message.guild.id,
-        )
-
-        channel_ids = []
-        if settings is not None:
-            for channel_id in (settings["main_starboard"], settings["specialty_starboard"]):
-                if channel_id is not None and int(channel_id) not in channel_ids:
-                    channel_ids.append(int(channel_id))
-
-        global_channel_id = get_global_starboard_channel_id()
-        if global_channel_id not in channel_ids:
-            channel_ids.append(global_channel_id)
-
         caught_by = (
             f"<@{catcher_id}>"
             if is_starboard_name_ping_enabled(catcher_id)
@@ -232,19 +213,62 @@ class Starboard(commands.Cog):
             f"**Level:** {level}\n"
             f"**IV:** {iv:.2f}%"
         )
+        embed.set_footer(text=message.guild.name)
         view = _catch_link_view(message)
 
+        local_channel_ids = await self._local_starboard_channel_ids(
+            message.guild.id,
+            specialty_column,
+        )
+        global_channel_id = get_global_starboard_channel_id()
+        channel_ids = list(local_channel_ids)
+        if global_channel_id not in channel_ids:
+            channel_ids.append(global_channel_id)
+
         for channel_id in channel_ids:
-            channel = self.bot.get_channel(channel_id)
-            if channel is None:
-                try:
-                    channel = await self.bot.fetch_channel(channel_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    continue
+            await self._send_starboard_embed(channel_id, catch_type, embed, view)
+
+    async def _local_starboard_channel_ids(self, guild_id: int, specialty_column):
+        try:
+            settings = await db.fetchrow(
+                f"""
+                SELECT main_starboard, {specialty_column or 'NULL'} AS specialty_starboard
+                FROM server_settings
+                WHERE serverid = $1
+                """,
+                guild_id,
+            )
+        except Exception as error:
+            print(f"⚠️ Failed to load starboard channels for {guild_id}: {error}")
+            return []
+
+        if settings is None:
+            return []
+
+        channel_ids = []
+        for channel_id in (settings["main_starboard"], settings["specialty_starboard"]):
+            if channel_id is not None and int(channel_id) not in channel_ids:
+                channel_ids.append(int(channel_id))
+        return channel_ids
+
+    async def _send_starboard_embed(
+        self,
+        channel_id: int,
+        catch_type: str,
+        embed: discord.Embed,
+        view: discord.ui.View,
+    ):
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
             try:
-                await channel.send(embed=embed, view=view)
-            except (discord.Forbidden, discord.HTTPException) as error:
-                print(f"⚠️ Failed to send {catch_type} starboard embed to {channel_id}: {error}")
+                channel = await self.bot.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as error:
+                print(f"⚠️ Failed to resolve {catch_type} starboard channel {channel_id}: {error}")
+                channel = self.bot.get_partial_messageable(channel_id)
+        try:
+            await channel.send(embed=embed, view=view)
+        except (discord.Forbidden, discord.HTTPException) as error:
+            print(f"⚠️ Failed to send {catch_type} starboard embed to {channel_id}: {error}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
