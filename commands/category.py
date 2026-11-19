@@ -10,6 +10,7 @@ from functions import (
     get_server_categories,
     get_server_category,
     has_server_permission,
+    is_pokemon_name_or_alias,
 )
 
 CATEGORIES_PER_PAGE = 10
@@ -288,6 +289,10 @@ class CategoryCommands(commands.Cog):
             )
         if len(name) > MAX_CATEGORY_NAME:
             return await ctx.send(f"❌ Category names can be at most {MAX_CATEGORY_NAME} characters.")
+        if is_pokemon_name_or_alias(name):
+            return await ctx.send(
+                f"❌ **{name}** is a Pokémon name or alias, so it cannot be used as a category."
+            )
 
         category_key = name.casefold()
         existing = await get_server_category(ctx.guild.id, category_key, db)

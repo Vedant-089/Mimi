@@ -202,9 +202,11 @@ CATEGORY_ALIAS_TO_KEY = {
     "eeveelutions": "eevos",
     "evos": "eevos",
     "paradox": "paradox",
+    "para": "paradox",
     "regional": "regional",
     "regionals": "regional",
 }
+_valid_pokemon_names = None
 
 # guild_id -> pokemon_name -> [userids]
 _type_ping_cache = defaultdict(lambda: defaultdict(list))
@@ -497,6 +499,28 @@ def resolve_alias(name: str) -> str:
     return ALIAS_MAPPING.get(cleaned, cleaned)
 
 
+def get_valid_pokemon_names() -> set[str]:
+    global _valid_pokemon_names
+    if _valid_pokemon_names is not None:
+        return _valid_pokemon_names
+    try:
+        with open("class.json", "r", encoding="utf-8") as file:
+            names = {str(name).lower().strip() for name in json.load(file).keys()}
+    except (FileNotFoundError, json.JSONDecodeError):
+        names = set()
+    names.update(ALIAS_MAPPING.keys())
+    names.update(ALIAS_MAPPING.values())
+    _valid_pokemon_names = {name for name in names if name}
+    return _valid_pokemon_names
+
+
+def is_pokemon_name_or_alias(name: str) -> bool:
+    cleaned = (name or "").strip().lower()
+    if not cleaned:
+        return False
+    return resolve_alias(cleaned) in get_valid_pokemon_names()
+
+
 # ------------------------
 # Hunt Cache Functions
 # ------------------------
@@ -752,17 +776,20 @@ def resolve_category_key(name: str) -> str:
 
 
 def get_group_pokemon_names(alias: str, guild_id=None) -> list[str] | None:
-    key = CATEGORY_ALIAS_TO_KEY.get((alias or "").strip().lower())
-    if key is None:
+    raw = (alias or "").strip().lower()
+    if not raw:
         return None
+    key = resolve_category_key(raw)
     if guild_id is not None:
         entry = _category_cache.get(guild_id, {}).get(key)
-        if entry and entry.get("pokemon"):
-            return list(entry["pokemon"])
+        if entry is not None:
+            return list(entry.get("pokemon") or [])
+    if raw not in CATEGORY_ALIAS_TO_KEY:
+        return None
     for default_key, _display_name, names in get_default_category_defs():
         if default_key == key:
             return list(names)
-    return []
+    return None
 
 
 async def ensure_default_categories(server_id: int, db_instance):

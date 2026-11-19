@@ -66,11 +66,6 @@ def expand_reserve_inputs(input_names, guild_id=None):
         if key.startswith("normal "):
             key = key[7:].strip()
 
-        group_names = get_group_pokemon_names(key, guild_id)
-        if group_names is not None:
-            expanded.update(name for name in group_names if name in VALID_POKEMON)
-            continue
-
         if key.startswith("all "):
             target = resolve_alias(key[4:].strip())
             if target in FORMS_BY_BASE:
@@ -89,8 +84,14 @@ def expand_reserve_inputs(input_names, guild_id=None):
         resolved = resolve_alias(key)
         if resolved in VALID_POKEMON:
             expanded.add(resolved)
-        else:
-            invalid.append(key)
+            continue
+
+        group_names = get_group_pokemon_names(key, guild_id)
+        if group_names is not None:
+            expanded.update(name for name in group_names if name in VALID_POKEMON)
+            continue
+
+        invalid.append(key)
 
     return sorted(expanded), invalid
 
