@@ -213,20 +213,19 @@ class Starboard(commands.Cog):
             f"**Level:** {level}\n"
             f"**IV:** {iv:.2f}%"
         )
-        embed.set_footer(text=message.guild.name)
-        view = _catch_link_view(message)
+        catch_view = _catch_link_view(message)
 
         local_channel_ids = await self._local_starboard_channel_ids(
             message.guild.id,
             specialty_column,
         )
         global_channel_id = get_global_starboard_channel_id()
-        channel_ids = list(local_channel_ids)
-        if global_channel_id not in channel_ids:
-            channel_ids.append(global_channel_id)
 
-        for channel_id in channel_ids:
-            await self._send_starboard_embed(channel_id, catch_type, embed, view)
+        for channel_id in local_channel_ids:
+            if channel_id == global_channel_id:
+                continue
+            await self._send_starboard_embed(channel_id, catch_type, embed, catch_view)
+        await self._send_starboard_embed(global_channel_id, catch_type, embed)
 
     async def _local_starboard_channel_ids(self, guild_id: int, specialty_column):
         try:
@@ -256,7 +255,7 @@ class Starboard(commands.Cog):
         channel_id: int,
         catch_type: str,
         embed: discord.Embed,
-        view: discord.ui.View,
+        view: discord.ui.View = None,
     ):
         channel = self.bot.get_channel(channel_id)
         if channel is None:
@@ -266,7 +265,10 @@ class Starboard(commands.Cog):
                 print(f"⚠️ Failed to resolve {catch_type} starboard channel {channel_id}: {error}")
                 channel = self.bot.get_partial_messageable(channel_id)
         try:
-            await channel.send(embed=embed, view=view)
+            if view is None:
+                await channel.send(embed=embed)
+            else:
+                await channel.send(embed=embed, view=view)
         except (discord.Forbidden, discord.HTTPException) as error:
             print(f"⚠️ Failed to send {catch_type} starboard embed to {channel_id}: {error}")
 
