@@ -11,6 +11,7 @@ from functions import (
     get_server_category,
     has_server_permission,
     is_pokemon_name_or_alias,
+    remove_category_from_cache,
 )
 
 CATEGORIES_PER_PAGE = 10
@@ -228,6 +229,11 @@ class CategoryListView(discord.ui.LayoutView):
 
 async def save_category_pokemon(server_id: int, category_key: str, display_name: str, pokemon_names):
     await db.execute(
+        "DELETE FROM server_category_deleted WHERE serverid = $1 AND category_key = $2",
+        server_id,
+        category_key,
+    )
+    await db.execute(
         "DELETE FROM server_categories WHERE serverid = $1 AND category_key = $2",
         server_id,
         category_key,
@@ -349,6 +355,37 @@ class CategoryCommands(commands.Cog):
         await ctx.send(
             format_save_response("Updated", existing["name"], valid_names, invalid_names)
         )
+
+    @category.command(name="delete", aliases=["del", "remove"])
+    @commands.guild_only()
+    async def delete(self, ctx: commands.Context, *, args: str = ""):
+        if not await self._ensure_manage(ctx):
+            return
+
+        name, extra = parse_category_args(args)
+        if not name or extra:
+            return await ctx.send("❌ Usage: `m!category delete <name>`")
+
+        existing = await get_server_category(ctx.guild.id, name, db)
+        if existing is None:
+            return await ctx.send(f"❌ No category named **{name}** in this server.")
+
+        await db.execute(
+            "DELETE FROM server_categories WHERE serverid = $1 AND category_key = $2",
+            ctx.guild.id,
+            existing["key"],
+        )
+        await db.execute(
+            """
+            INSERT INTO server_category_deleted (serverid, category_key)
+            VALUES ($1, $2)
+            ON CONFLICT (serverid, category_key) DO NOTHING
+            """,
+            ctx.guild.id,
+            existing["key"],
+        )
+        await remove_category_from_cache(ctx.guild.id, existing["key"])
+        await ctx.send(f"🗑️ Deleted **{existing['name']}**.")
 
 
 async def setup(bot: commands.Bot):

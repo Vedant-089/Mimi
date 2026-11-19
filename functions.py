@@ -187,6 +187,7 @@ _reserve_cache_lock = asyncio.Lock()
 # guild_id -> pokemon_name -> [category_keys]
 _category_cache = defaultdict(dict)
 _category_pokemon_cache = defaultdict(lambda: defaultdict(list))
+_category_deleted = defaultdict(set)
 _category_cache_last_updated = 0
 _category_cache_lock = asyncio.Lock()
 _default_category_defs = None
@@ -289,6 +290,13 @@ PING_TABLES_SQL = [
         display_name TEXT NOT NULL,
         pokemon_name TEXT NOT NULL,
         PRIMARY KEY (serverid, category_key, pokemon_name)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS server_category_deleted (
+        serverid BIGINT NOT NULL,
+        category_key TEXT NOT NULL,
+        PRIMARY KEY (serverid, category_key)
     );
     """,
 ]
@@ -781,6 +789,8 @@ def get_group_pokemon_names(alias: str, guild_id=None) -> list[str] | None:
         return None
     key = resolve_category_key(raw)
     if guild_id is not None:
+        if key in _category_deleted.get(guild_id, set()):
+            return None
         entry = _category_cache.get(guild_id, {}).get(key)
         if entry is not None:
             return list(entry.get("pokemon") or [])
@@ -797,10 +807,11 @@ async def ensure_default_categories(server_id: int, db_instance):
         if _category_cache_last_updated == 0:
             await refresh_category_cache(db_instance)
         existing = _category_cache.get(server_id, {})
+        deleted = _category_deleted.get(server_id, set())
         missing = [
             (key, display_name, names)
             for key, display_name, names in get_default_category_defs()
-            if key not in existing
+            if key not in existing and key not in deleted
         ]
         if not missing:
             return
@@ -823,7 +834,7 @@ async def ensure_default_categories(server_id: int, db_instance):
 
 
 async def refresh_category_cache(db_instance):
-    global _category_cache, _category_pokemon_cache, _category_cache_last_updated
+    global _category_cache, _category_pokemon_cache, _category_deleted, _category_cache_last_updated
     async with _category_cache_lock:
         try:
             rows = await db_instance.fetch(
@@ -832,8 +843,15 @@ async def refresh_category_cache(db_instance):
                 FROM server_categories
                 """
             )
+            deleted_rows = await db_instance.fetch(
+                """
+                SELECT serverid, category_key
+                FROM server_category_deleted
+                """
+            )
             temp_categories = defaultdict(dict)
             temp_pokemon = defaultdict(lambda: defaultdict(list))
+            temp_deleted = defaultdict(set)
             for row in rows:
                 server_id = row["serverid"]
                 key = (row["category_key"] or "").strip().lower()
@@ -848,11 +866,16 @@ async def refresh_category_cache(db_instance):
                     entry["pokemon"].append(pokemon_name)
                 if key not in temp_pokemon[server_id][pokemon_name]:
                     temp_pokemon[server_id][pokemon_name].append(key)
+            for row in deleted_rows:
+                key = (row["category_key"] or "").strip().lower()
+                if key:
+                    temp_deleted[row["serverid"]].add(key)
             for server_entries in temp_categories.values():
                 for entry in server_entries.values():
                     entry["pokemon"].sort()
             _category_cache = temp_categories
             _category_pokemon_cache = temp_pokemon
+            _category_deleted = temp_deleted
             _category_cache_last_updated = time.time()
         except Exception as e:
             print("❌ Category Cache Refresh Error:", e)
@@ -890,6 +913,26 @@ async def apply_category_cache(server_id: int, category_key: str, display_name: 
             mapped = _category_pokemon_cache[server_id][poke]
             if key not in mapped:
                 mapped.append(key)
+        _category_deleted[server_id].discard(key)
+
+
+async def remove_category_from_cache(server_id: int, category_key: str):
+    if _category_cache_last_updated == 0:
+        return
+
+    key = (category_key or "").strip().lower()
+    async with _category_cache_lock:
+        if _category_cache_last_updated == 0:
+            return
+        old = _category_cache[server_id].pop(key, None)
+        if old:
+            for poke in old.get("pokemon", []):
+                mapped = _category_pokemon_cache[server_id][poke]
+                try:
+                    mapped.remove(key)
+                except ValueError:
+                    pass
+        _category_deleted[server_id].add(key)
 
 
 async def get_server_categories(server_id: int, db_instance):
