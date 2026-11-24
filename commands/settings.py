@@ -4,9 +4,10 @@ from discord.ext import commands
 from database import db
 from functions import (
     get_allowed_role_ids,
+    get_allowed_role_perms,
     has_server_permission,
     invalidate_server_settings_cache,
-    set_allowed_role_ids,
+    set_allowed_role_perm,
 )
 
 
@@ -165,11 +166,13 @@ class ServerSettingsView(discord.ui.LayoutView):
             return
         settings = await get_server_settings(self.server_id)
         await interaction.response.edit_message(
-            view=AllowedRoleSettingsView(
+            view=AllowedRoleListView(
                 self.author_id,
                 self.server_id,
-                settings,
-            )
+                settings["naming"],
+                settings["shiny_hunt_prio"],
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
 
@@ -594,24 +597,200 @@ class StarboardSettingsView(discord.ui.LayoutView):
 
 
 ALLOWED_PERM_FIELDS = (
-    ("allow_reserves", "Reserve Commands", "Let allowed roles use reserve commands."),
-    ("allow_category", "Category Edit/Create", "Let allowed roles create and edit categories."),
-    ("allow_settings", "Configure Server Settings of Mimi", "Let allowed roles change Mimi server settings."),
+    ("allow_reserves", "Reserve Commands", "Let this role use reserve commands."),
+    ("allow_category", "Category Edit/Create", "Let this role create and edit categories."),
+    ("allow_settings", "Configure Server Settings of Mimi", "Let this role change Mimi server settings."),
 )
+ALLOWED_ROLES_PER_PAGE = 5
+NO_ROLE_PINGS = discord.AllowedMentions.none()
 
 
-class AllowedRoleSettingsView(discord.ui.LayoutView):
-    def __init__(self, author_id: int, server_id: int, settings):
+class AllowedRoleListView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        author_id: int,
+        server_id: int,
+        naming_enabled: bool = True,
+        shiny_hunt_prio: bool = False,
+        page: int = 0,
+    ):
         super().__init__(timeout=180)
         self.author_id = author_id
         self.server_id = server_id
-        self.naming_enabled = bool(settings["naming"])
-        self.shiny_hunt_prio = bool(settings["shiny_hunt_prio"])
+        self.naming_enabled = naming_enabled
+        self.shiny_hunt_prio = shiny_hunt_prio
+        self.page = page
+        self.allowed_role_ids = get_allowed_role_ids(server_id)
+        self._build_layout()
+
+    def _build_layout(self):
+        self.clear_items()
+        self.allowed_role_ids = get_allowed_role_ids(self.server_id)
+        total = len(self.allowed_role_ids)
+        max_page = max(0, (total - 1) // ALLOWED_ROLES_PER_PAGE) if total else 0
+        self.page = min(self.page, max_page)
+        start = self.page * ALLOWED_ROLES_PER_PAGE
+        page_role_ids = self.allowed_role_ids[start : start + ALLOWED_ROLES_PER_PAGE]
+
+        children = [
+            discord.ui.TextDisplay(
+                "# Allowed role\nRoles added with `m!allow` and what they can manage."
+            ),
+            discord.ui.Separator(),
+        ]
+        if not page_role_ids:
+            children.append(discord.ui.TextDisplay("No allowed roles yet."))
+        else:
+            for index, role_id in enumerate(page_role_ids):
+                button = discord.ui.Button(
+                    label="Edit",
+                    style=discord.ButtonStyle.primary,
+                    custom_id=f"settings:allowed-role:edit:{start + index}",
+                )
+                button.callback = self._edit_callback(role_id)
+                children.append(
+                    discord.ui.Section(
+                        f"<@&{role_id}>",
+                        accessory=button,
+                    )
+                )
+
+        children.append(discord.ui.Separator())
+        children.append(
+            discord.ui.TextDisplay("-# Use `m!allow @role` to add a role.")
+        )
+
+        if total > ALLOWED_ROLES_PER_PAGE:
+            prev_button = discord.ui.Button(
+                label="◀",
+                style=discord.ButtonStyle.secondary,
+                custom_id="settings:allowed-role:page:prev",
+                disabled=self.page == 0,
+            )
+            prev_button.callback = self.prev_page
+            next_button = discord.ui.Button(
+                label="▶",
+                style=discord.ButtonStyle.secondary,
+                custom_id="settings:allowed-role:page:next",
+                disabled=self.page >= max_page,
+            )
+            next_button.callback = self.next_page
+            children.append(discord.ui.ActionRow(prev_button, next_button))
+
+        back_button = discord.ui.Button(
+            label="Back",
+            style=discord.ButtonStyle.primary,
+            custom_id="settings:allowed-role:back",
+        )
+        back_button.callback = self.back
+        children.append(discord.ui.ActionRow(back_button))
+
+        self.add_item(
+            discord.ui.Container(
+                *children,
+                accent_color=discord.Color.from_rgb(47, 49, 54),
+            )
+        )
+
+    def _edit_callback(self, role_id: int):
+        async def callback(interaction: discord.Interaction):
+            if not await self._check_user(interaction):
+                return
+            if not await self._check_admin(interaction):
+                return
+            perms = get_allowed_role_perms(self.server_id, role_id)
+            if perms is None:
+                self._build_layout()
+                return await interaction.response.edit_message(
+                    view=self,
+                    allowed_mentions=NO_ROLE_PINGS,
+                )
+            await interaction.response.edit_message(
+                view=AllowedRoleEditView(
+                    self.author_id,
+                    self.server_id,
+                    role_id,
+                    perms,
+                    self.naming_enabled,
+                    self.shiny_hunt_prio,
+                    self.page,
+                ),
+                allowed_mentions=NO_ROLE_PINGS,
+            )
+
+        return callback
+
+    async def _check_user(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ Only the person who opened these settings can use the buttons.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _check_admin(self, interaction: discord.Interaction) -> bool:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server administrators can change allowed role permissions.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def prev_page(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        if self.page > 0:
+            self.page -= 1
+        self._build_layout()
+        await interaction.response.edit_message(view=self, allowed_mentions=NO_ROLE_PINGS)
+
+    async def next_page(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        max_page = max(0, (len(self.allowed_role_ids) - 1) // ALLOWED_ROLES_PER_PAGE)
+        if self.page < max_page:
+            self.page += 1
+        self._build_layout()
+        await interaction.response.edit_message(view=self, allowed_mentions=NO_ROLE_PINGS)
+
+    async def back(self, interaction: discord.Interaction):
+        if not await self._check_user(interaction):
+            return
+        await interaction.response.edit_message(
+            view=ServerSettingsView(
+                self.author_id,
+                self.server_id,
+                self.naming_enabled,
+                self.shiny_hunt_prio,
+            ),
+            allowed_mentions=NO_ROLE_PINGS,
+        )
+
+
+class AllowedRoleEditView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        author_id: int,
+        server_id: int,
+        role_id: int,
+        perm_flags: dict,
+        naming_enabled: bool = True,
+        shiny_hunt_prio: bool = False,
+        page: int = 0,
+    ):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.server_id = server_id
+        self.role_id = role_id
         self.perm_flags = {
-            field: True if settings[field] is None else bool(settings[field])
+            field: bool(perm_flags.get(field, False))
             for field, _, _ in ALLOWED_PERM_FIELDS
         }
-        self.allowed_role_ids = get_allowed_role_ids(server_id)
+        self.naming_enabled = naming_enabled
+        self.shiny_hunt_prio = shiny_hunt_prio
+        self.page = page
         self._build_layout()
 
     def _toggle_button(self, field: str):
@@ -619,7 +798,7 @@ class AllowedRoleSettingsView(discord.ui.LayoutView):
         button = discord.ui.Button(
             label="On" if enabled else "Off",
             style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.danger,
-            custom_id=f"settings:allowed-role:{field}",
+            custom_id=f"settings:allowed-role:{self.role_id}:{field}",
         )
 
         async def callback(interaction: discord.Interaction, perm_field=field):
@@ -630,25 +809,6 @@ class AllowedRoleSettingsView(discord.ui.LayoutView):
 
     def _build_layout(self):
         self.clear_items()
-        if self.allowed_role_ids:
-            roles_text = ", ".join(f"<@&{role_id}>" for role_id in self.allowed_role_ids)
-        else:
-            roles_text = "None yet. Select roles below or use `m!allow`."
-
-        role_select_kwargs = {
-            "placeholder": "Select allowed roles",
-            "min_values": 0,
-            "max_values": 25,
-            "custom_id": "settings:allowed-role:select",
-            "required": False,
-        }
-        if self.allowed_role_ids:
-            role_select_kwargs["default_values"] = [
-                discord.Object(id=role_id) for role_id in self.allowed_role_ids[:25]
-            ]
-        self.role_select = discord.ui.RoleSelect(**role_select_kwargs)
-        self.role_select.callback = self.select_roles
-
         sections = []
         for field, title, hint in ALLOWED_PERM_FIELDS:
             status = "✅ **Enabled**" if self.perm_flags[field] else "❌ **Disabled**"
@@ -662,18 +822,17 @@ class AllowedRoleSettingsView(discord.ui.LayoutView):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
-            custom_id="settings:allowed-role:back",
+            custom_id="settings:allowed-role:edit-back",
         )
         back_button.callback = self.back
 
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    "# Allowed role\nConfigure which roles are allowed and what they can do."
+                    "# Allowed role\nPermissions for the selected role."
                 ),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(f"**Allowed roles**\n{roles_text}"),
-                discord.ui.ActionRow(self.role_select),
+                discord.ui.TextDisplay(f"**Selected role**\n<@&{self.role_id}>"),
                 discord.ui.Separator(),
                 *sections,
                 discord.ui.Separator(),
@@ -700,37 +859,45 @@ class AllowedRoleSettingsView(discord.ui.LayoutView):
             return False
         return True
 
-    async def select_roles(self, interaction: discord.Interaction):
-        if not await self._check_user(interaction) or not await self._check_admin(interaction):
-            return
-        self.allowed_role_ids = [role.id for role in self.role_select.values]
-        set_allowed_role_ids(self.server_id, self.allowed_role_ids)
-        self._build_layout()
-        await interaction.response.edit_message(view=self)
-
     async def toggle_perm(self, interaction: discord.Interaction, field: str):
         if not await self._check_user(interaction) or not await self._check_admin(interaction):
             return
-        self.perm_flags[field] = not self.perm_flags[field]
-        await db.execute(
-            f"UPDATE server_settings SET {field} = $1 WHERE serverid = $2",
-            self.perm_flags[field],
+        updated = set_allowed_role_perm(
             self.server_id,
+            self.role_id,
+            field,
+            not self.perm_flags[field],
         )
-        invalidate_server_settings_cache(self.server_id)
+        if updated is None:
+            return await interaction.response.edit_message(
+                view=AllowedRoleListView(
+                    self.author_id,
+                    self.server_id,
+                    self.naming_enabled,
+                    self.shiny_hunt_prio,
+                    self.page,
+                ),
+                allowed_mentions=NO_ROLE_PINGS,
+            )
+        self.perm_flags = {
+            perm_field: bool(updated.get(perm_field, False))
+            for perm_field, _, _ in ALLOWED_PERM_FIELDS
+        }
         self._build_layout()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(view=self, allowed_mentions=NO_ROLE_PINGS)
 
     async def back(self, interaction: discord.Interaction):
         if not await self._check_user(interaction):
             return
         await interaction.response.edit_message(
-            view=ServerSettingsView(
+            view=AllowedRoleListView(
                 self.author_id,
                 self.server_id,
                 self.naming_enabled,
                 self.shiny_hunt_prio,
-            )
+                self.page,
+            ),
+            allowed_mentions=NO_ROLE_PINGS,
         )
 
 

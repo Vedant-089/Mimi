@@ -10,13 +10,12 @@ from database import db
 from functions import (
     ensure_default_categories,
     ensure_ping_tables,
-    get_allowed_role_ids,
+    add_allowed_role_ids,
     get_group_pokemon_names,
     has_server_permission,
     is_suspended,
     refresh_reserve_cache,
     resolve_alias,
-    set_allowed_role_ids,
 )
 
 with open("class.json", "r", encoding="utf-8") as f:
@@ -216,14 +215,20 @@ class ReserveCommands(commands.Cog):
             await ctx.send(f"❌ These are not valid roles in this server: {invalid_text}")
             return
 
-        current_ids = get_allowed_role_ids(ctx.guild.id)
-        for role_id in role_ids_to_add:
-            if role_id not in current_ids:
-                current_ids.append(role_id)
-        set_allowed_role_ids(ctx.guild.id, current_ids)
+        added_ids = add_allowed_role_ids(ctx.guild.id, role_ids_to_add)
+        if not added_ids:
+            already = ", ".join(f"<@&{role_id}>" for role_id in role_ids_to_add)
+            await ctx.send(
+                f"ℹ️ Already allowed: {already}",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
 
-        role_mentions = ", ".join(f"<@&{role_id}>" for role_id in role_ids_to_add)
-        await ctx.send(f"✅ Allowed access for: {role_mentions}")
+        role_mentions = ", ".join(f"<@&{role_id}>" for role_id in added_ids)
+        await ctx.send(
+            f"✅ Allowed access for: {role_mentions}",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     def _mention_members(self, ctx: commands.Context) -> list[discord.Member]:
         mentioned = []

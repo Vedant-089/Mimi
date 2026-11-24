@@ -27,7 +27,7 @@ HELP_PAGES_DATA = [
             "• `m!r search <pokemon>` (`m!r s`) - Searches for users who have reserved specific Pokémon.\n"
             "• `m!r list` (`m!r l`) - Lists all active Pokémon reserves in the server.\n"
             "• `m!r @user` - Displays all reserved Pokémon for a specific user.\n"
-            "• `m!allow <roleid1>, <roleid2>` - Admin-only; adds roles to the allowed roles list used in `m!settings`."
+            "• `m!allow @role` - Admin-only; adds a role to Allowed role in `m!settings`. Edit that role there to choose its permissions."
             "\n• `m!suspend <userid>` - Suspends a user and removes their Mimi data (Admins/allowed roles).\n"
             "• `m!unsuspend <userid>` - Removes a user's suspension (Admins/allowed roles)."
         ),

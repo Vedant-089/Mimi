@@ -88,6 +88,11 @@ def is_suspended(user) -> bool:
 
 
 _allowed_roles_cache = None
+DEFAULT_ALLOWED_ROLE_PERMS = {
+    "allow_reserves": True,
+    "allow_category": False,
+    "allow_settings": False,
+}
 
 
 def load_allowed_roles() -> dict:
@@ -112,32 +117,112 @@ def save_allowed_roles(data: dict) -> None:
         json.dump(data, f, indent=2)
 
 
+def _default_allowed_role_perms(guild_id: int) -> dict:
+    cached = _server_settings_cache.get(guild_id)
+    if not cached:
+        return dict(DEFAULT_ALLOWED_ROLE_PERMS)
+    return {
+        "allow_reserves": bool(cached.get("allow_reserves", True)),
+        "allow_category": bool(cached.get("allow_category", False)),
+        "allow_settings": bool(cached.get("allow_settings", False)),
+    }
+
+
+def _normalize_role_perms(raw_perms, defaults: dict) -> dict:
+    if not isinstance(raw_perms, dict):
+        return dict(defaults)
+    return {
+        field: bool(raw_perms.get(field, defaults[field]))
+        for field in DEFAULT_ALLOWED_ROLE_PERMS
+    }
+
+
+def get_allowed_roles(guild_id: int) -> dict:
+    raw = load_allowed_roles().get(str(guild_id), {})
+    defaults = _default_allowed_role_perms(guild_id)
+    roles = {}
+    if isinstance(raw, list):
+        values = raw
+        for value in values:
+            try:
+                role_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if role_id not in roles:
+                roles[role_id] = dict(defaults)
+    elif isinstance(raw, dict):
+        for key, value in raw.items():
+            try:
+                role_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if role_id not in roles:
+                roles[role_id] = _normalize_role_perms(value, defaults)
+    return roles
+
+
+def _save_guild_allowed_roles(guild_id: int, roles: dict) -> dict:
+    data = load_allowed_roles()
+    data[str(guild_id)] = {
+        str(role_id): {
+            field: bool(perms.get(field, DEFAULT_ALLOWED_ROLE_PERMS[field]))
+            for field in DEFAULT_ALLOWED_ROLE_PERMS
+        }
+        for role_id, perms in roles.items()
+    }
+    save_allowed_roles(data)
+    return roles
+
+
 def get_allowed_role_ids(guild_id: int) -> list[int]:
-    raw_ids = load_allowed_roles().get(str(guild_id), [])
-    role_ids = []
-    for value in raw_ids:
-        try:
-            role_id = int(value)
-        except (TypeError, ValueError):
-            continue
-        if role_id not in role_ids:
-            role_ids.append(role_id)
-    return role_ids
+    return list(get_allowed_roles(guild_id))
 
 
 def set_allowed_role_ids(guild_id: int, role_ids) -> list[int]:
-    data = load_allowed_roles()
-    cleaned = []
+    current = get_allowed_roles(guild_id)
+    defaults = _default_allowed_role_perms(guild_id)
+    roles = {}
     for value in role_ids:
         try:
             role_id = int(value)
         except (TypeError, ValueError):
             continue
-        if role_id not in cleaned:
-            cleaned.append(role_id)
-    data[str(guild_id)] = cleaned
-    save_allowed_roles(data)
-    return cleaned
+        if role_id not in roles:
+            roles[role_id] = dict(current.get(role_id) or defaults)
+    _save_guild_allowed_roles(guild_id, roles)
+    return list(roles)
+
+
+def add_allowed_role_ids(guild_id: int, role_ids) -> list[int]:
+    roles = get_allowed_roles(guild_id)
+    defaults = _default_allowed_role_perms(guild_id)
+    added = []
+    for value in role_ids:
+        try:
+            role_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if role_id not in roles:
+            roles[role_id] = dict(defaults)
+            added.append(role_id)
+    _save_guild_allowed_roles(guild_id, roles)
+    return added
+
+
+def get_allowed_role_perms(guild_id: int, role_id: int) -> dict | None:
+    return get_allowed_roles(guild_id).get(int(role_id))
+
+
+def set_allowed_role_perm(guild_id: int, role_id: int, field: str, enabled: bool) -> dict | None:
+    if field not in DEFAULT_ALLOWED_ROLE_PERMS:
+        return None
+    roles = get_allowed_roles(guild_id)
+    role_id = int(role_id)
+    if role_id not in roles:
+        return None
+    roles[role_id][field] = bool(enabled)
+    _save_guild_allowed_roles(guild_id, roles)
+    return roles[role_id]
 
 
 def member_has_allowed_role(member: discord.Member) -> bool:
@@ -152,8 +237,11 @@ def has_allowed_support_role(member: discord.Member) -> bool:
 async def has_server_permission(member: discord.Member, permission_key: str, db_instance) -> bool:
     if member.guild_permissions.administrator:
         return True
-    settings = await get_server_spawn_settings(member.guild.id, db_instance)
-    return bool(settings.get(permission_key)) and member_has_allowed_role(member)
+    roles = get_allowed_roles(member.guild.id)
+    return any(
+        bool(roles.get(role.id, {}).get(permission_key))
+        for role in member.roles
+    )
 
 
 async def wipe_user_data(db_instance, user_id: int):
